@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Fixture testcase-compiler</title>
+  </head>
+  <body>
+    <h1>Halaman Fixture untuk Test testcase-compiler</h1>
+
+    <input id="name-input" type="text" />
+
+    <button id="submit-btn" onclick="document.getElementById('result').textContent = 'clicked'">
+      Submit
+    </button>
+    <div id="result"></div>
+
+    <input id="agree-checkbox" type="checkbox" />
+
+    <select id="color-select">
+      <option value="red">Merah</option>
+      <option value="blue">Biru</option>
+    </select>
+
+    <script>
+      // Elemen ini baru muncul setelah delay, untuk menguji action "waitFor".
+      setTimeout(() => {
+        const el = document.createElement('div');
+        el.id = 'delayed-element';
+        el.textContent = 'Elemen ini muncul belakangan';
+        document.body.appendChild(el);
+      }, 300);
+    </script>
+  </body>
+</html>

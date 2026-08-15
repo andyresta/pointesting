@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.env
+test-results/
+playwright-report/
+storage/artifacts/*
+!storage/artifacts/.gitkeep
+storage/fixtures/*
+!storage/fixtures/.gitkeep

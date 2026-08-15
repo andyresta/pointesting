@@ -1,0 +1,37 @@
+---
+description: Baca dan update docs/memory.md untuk konteks lintas sesi
+alwaysApply: true
+---
+
+# Memory lintas sesi
+
+## Awal setiap sesi percakapan
+
+1. Baca `docs/memory.md` **sebelum** mulai mengerjakan task.
+2. Pakai isinya sebagai konteks (keputusan, preferensi, progress, blocker).
+3. Jangan mengulang dari nol jika memory sudah menjelaskan status terkini.
+
+## Kapan harus update `docs/memory.md`
+
+Update memory bila ada salah satu:
+- Keputusan desain / arsitektur / preferensi user baru
+- Step selesai atau berubah status secara berarti
+- Blocker, workaround, atau catatan lingkungan (Node, DB, tools)
+- Perubahan lokasi struktur project atau konvensi kerja
+- User berpindah fokus/ide — catat fokus baru + apa yang ditunda
+
+## Cara update
+
+- Tulis ringkas di bagian yang relevan (Keputusan / Dikerjakan / Belum dikerjakan).
+- Tambah entri baru di **Log sesi** (terbaru di atas).
+- Jangan dump seluruh chat atau salin spesifikasi panjang.
+- Jangan catat rahasia: password, API key, token, data pribadi, kredensial production.
+- `PROJECT_STATUS.md` tetap sumber status step resmi; memory fokus ke konteks percakapan.
+
+## Bahasa & gaya kerja (dari preferensi user)
+
+- Balasan chat: bahasa Indonesia.
+- Keterangan singkat wajib untuk setiap fungsi baru.
+- Call API/AJAX: POST (kecuali yang sudah disepakati khusus, mis. health check).
+- UI + AJAX: selalu tampilkan spinner loading — di button jika aksi tombol,
+  di tengah halaman jika muat/refresh halaman.

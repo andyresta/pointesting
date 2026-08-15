@@ -1,0 +1,289 @@
+# Memory — AI Testing Tool
+
+Dokumen ini menyimpan **konteks percakapan lintas sesi**. Dibaca di awal setiap sesi chat, dan diperbarui setiap ada perubahan penting (keputusan, progress, preferensi, blocker).
+
+**Bukan pengganti** dokumen teknis lain:
+- Aturan kerja AI (semua IDE selain Cursor) → `docs/instruction.md`
+- Status step resmi → `docs/PROJECT_STATUS.md`
+- Spesifikasi → `docs/arsitektur-spesifikasi-teknis.md`
+- Urutan kerja → `docs/execution-plan-ai-testing-tool.md`
+- Roadmap → `docs/roadmap-ai-testing-tool.md`
+
+---
+
+## Cara pakai (untuk AI & manusia)
+
+1. **Awal sesi:** baca file ini dulu sebelum mengerjakan apa pun.
+2. **Saat kerja:** catat di sini bila ada keputusan, preferensi user, blocker, atau progress berarti.
+3. **Jangan** menyalin ulang seluruh spesifikasi — cukup ringkas + pointer ke dokumen yang relevan.
+4. **Jangan** simpan data sensitif (password, API key, NIK, kredensial production).
+
+---
+
+## Snapshot proyek (saat ini)
+
+| Item | Nilai |
+|---|---|
+| Nama project | `ai-testing-tool` (di repo `pointesting`) |
+| Root kode | sejajar dengan `docs/` (bukan subfolder `ai-testing-tool/`) |
+| Stack | Node.js + TypeScript (strict), Fastify, `ws`, `pg`, `dotenv`, `zod`, `@playwright/test` |
+| Package manager | npm |
+| Fase roadmap | Fase 1 (fondasi) |
+| Progress scaffolding | Step 1–9 selesai; `playwright.config.ts` sudah dibuat di Step 8 |
+
+---
+
+## Keputusan yang sudah disepakati
+
+- Struktur folder mengikuti **persis** bagian "2. Struktur Proyek" di `arsitektur-spesifikasi-teknis.md`.
+- Kode project diletakkan **satu level dengan `docs/`** (bukan di dalam folder `ai-testing-tool/`).
+- Scaffolding awal murni: jangan implementasi logic di luar yang diminta per step.
+- Semua call API/AJAX memakai **POST** (preferensi user — berlaku untuk implementasi API ke depan; health check GET `/health` tetap sesuai instruksi scaffolding).
+- Balasan chat AI memakai **bahasa Indonesia**.
+- Setiap fungsi baru wajib punya **Keterangan** (komentar singkat).
+- Migration memakai SQL bernomor urut di `src/db/migrations/`; tracking lewat tabel `_migrations`.
+- DDL 8 tabel diambil **persis** dari dokumen teknis (jangan ubah nama kolom/tipe).
+- PK UUID memakai `gen_random_uuid()` (+ `CREATE EXTENSION IF NOT EXISTS pgcrypto`).
+- Config env lewat `src/config/env.ts` (dotenv + Zod); server wajib pakai `config`, bukan `process.env` langsung.
+- Koneksi DB tidak memakai connection string: `DB_HOST`, `DB_NAME`, `DB_PORT`, `DB_USER`, `DB_PASS`.
+- Database lokal bernama `pointesting`; `DB_PORT` default 5432.
+- Env wajib: `DB_HOST`, `DB_NAME`, `DB_USER`, `AUTH_SECRET`; `PORT` default 3000. API key provider opsional (boleh kosong).
+- Validasi env gagal → pesan jelas + `process.exit(1)`.
+- Route API mengikuti method persis tabel spesifikasi bagian 5 (GET/POST/PATCH campur) — bukan semua-POST, karena instruksi eksplisit user untuk step ini adalah "daftarkan sesuai tabel spesifikasi".
+- Endpoint yang komponennya belum ada (queue, artifact-storage, auth) di-throw `ApiError(501, ...)` dengan pesan yang menyebut step mana yang akan mengimplementasikannya.
+- Semua error API (terkontrol maupun tak terduga) dan 404 route memakai format konsisten `{ error: string, statusCode: number }` lewat global error handler.
+- Autentikasi personal/single-user: credential (`AUTH_USERNAME` + `AUTH_PASSWORD_HASH` bcrypt) dari env, TANPA tabel user di database.
+- Login berhasil → JWT signed `AUTH_SECRET`, masa berlaku 7 hari. Dikirim via header `Authorization: Bearer <token>`.
+- Semua route wajib token JWT KECUALI `GET /health` dan `POST /auth/login` (global preHandler hook).
+- `bcrypt` (native, pakai prebuilt binary — tidak perlu compile) dan `jsonwebtoken` dipakai untuk hashing & JWT.
+- Tiap provider AI di env sekarang juga punya `*_MODEL` (default aktif) dan `*_MODELS` (daftar pilihan, CSV) selain `*_API_KEY` — di-expose sebagai `config.providers.<nama>` yang sudah dirapikan (apiKey/defaultModel/availableModels).
+- In-memory queue pakai `p-queue@6.6.2` (BUKAN versi terbaru) — p-queue v7+ ESM-only, sedangkan project ini `"type": "commonjs"`. Kalau mau upgrade p-queue nanti, harus pindah project ke ESM dulu atau pakai dynamic import.
+- Dua named queue: `testRunQueue` (concurrency env `TEST_RUN_QUEUE_CONCURRENCY`, default 2) dan `analysisQueue` (`ANALYSIS_QUEUE_CONCURRENCY`, default 3).
+- `POST /test-cases/:id/run` sudah full (bukan 501 lagi): insert `test_run` status `queued` → `enqueueTestRun` → balikan `202 { runId, status }`. Isi job (`handleTestRunJob`) masih placeholder console.log sampai Step 9.
+- Server startup memanggil `recoverStaleRunningTestRuns()` (di `src/queue/queue.ts`) sebelum `app.listen` — test_run status `running` dari sesi sebelumnya di-mark `error` + `finishedAt` terisi.
+- `src/runner/testcase-compiler.ts` (`executeSteps`) fail-fast: satu step gagal → step berikutnya tidak dijalankan, tapi fungsi tetap mengembalikan array hasil (tidak pernah throw).
+- Unit test compiler pakai `@playwright/test` sungguhan (bukan mock) terhadap fixture HTML lokal via `file://` URL — tidak perlu web server. `playwright.config.ts` set `actionTimeout: 3000ms` supaya skenario gagal (selector tidak ada) tidak nunggu default 30s.
+- Browser Playwright (Chromium) diinstall via `npx playwright install chromium` (TANPA `--with-deps`, karena install system deps butuh sudo yang tidak tersedia di mesin ini). Kalau pindah mesin/CI, install ulang browser dulu sebelum `npm test`.
+- `npm test` sekarang menjalankan `playwright test` (sebelumnya placeholder error).
+- Pilihan model UI tidak lagi bergantung pada hardcoded `*_MODELS`: backend
+  menyediakan `POST /ai/models` dan mengambil katalog dinamis dari endpoint
+  resmi Claude/OpenAI/DeepSeek/Kimi/OpenCode Zen (cache 5 menit). `*_MODELS`
+  tetap dipertahankan hanya sebagai fallback bila endpoint gagal/API key kosong.
+- `OPENCODE_API_KEY` berarti API key OpenCode Zen; base katalog/runtime Zen
+  adalah `https://opencode.ai/zen/v1`. Katalog `/models` saat ini publik, tetapi
+  API key tetap diperlukan ketika model benar-benar dipanggil untuk inference
+  pada implementasi provider adapter Step 16.
+- OpenCode Go (`https://opencode.ai/zen/go/v1`, subscription $10/bulan, katalog
+  curated) adalah produk TERPISAH dari OpenCode Zen (pay-as-you-go, katalog
+  lengkap ~60 model) walau satu `OPENCODE_API_KEY` bisa dipakai untuk keduanya
+  (Go butuh entitlement subscription tambahan). Aplikasi ini baru dukung Zen;
+  pemisahan jadi provider `opencode-zen`/`opencode-go` belum diimplementasikan
+  (baru dibahas, tunggu keputusan/permintaan eksplisit).
+- `src/runner/executor.ts` (`executeTestRun`) — satu-satunya pemanggil nyata
+  `chromium.launch()` di luar unit test; video via `context` option
+  `recordVideo: { dir }`, trace via `context.tracing.start/stop({ path })`.
+  Video baru final setelah `context.close()`; browser SELALU ditutup di
+  `finally` (guard `context`/`browser` bisa `undefined` agar tidak double-close).
+- Temp video/trace disimpan di `os.tmpdir()/ai-testing-tool-runs/<runId>/`
+  (BUKAN langsung di `./storage/artifacts/`) — sengaja, supaya jelas
+  batasannya dengan Step 10 (`collectArtifacts`, pindah ke lokasi final +
+  insert row `artifact`) dan Step 11 (`artifact-storage.ts`).
+- Status akhir `test_run` di Step 9 murni dari keberhasilan step Playwright
+  (`passed` kalau semua step passed, `failed` kalau ada yang gagal) — TIDAK
+  mengecek field `expected` sama sekali; itu scope AI Analyzer Fase 2.
+- `handleTestRunJob` di `queue.ts` sekarang memanggil `executeTestRun` asli
+  (bukan console.log placeholder lagi); `executeTestRun` didesain tidak pernah
+  throw (try-catch-finally berlapis) supaya satu job gagal tidak mematikan
+  worker/queue.
+- PENTING: `playwright.config.ts` (`actionTimeout: 3000ms`) HANYA berlaku
+  untuk `npm test` (`playwright test`). `executor.ts` memanggil
+  `chromium.launch()` langsung (bukan lewat test runner), jadi timeout
+  default Playwright (30s per action) yang berlaku di sana, bukan 3000ms.
+
+---
+
+## Preferensi & aturan kerja user
+
+- Komunikasi: langsung, ringkas, bahasa Indonesia.
+- Jangan commit kecuali diminta.
+- Jangan tambah scope di luar instruksi step yang sedang dikerjakan.
+- Sensitive data tidak boleh masuk prompt/chat.
+- Privacy Mode wajib (aturan workspace team).
+- UI + AJAX: wajib spinner loading — di button untuk aksi tombol proses;
+  di tengah halaman untuk muat/refresh halaman. Detail di `docs/instruction.md` §9.
+---
+
+## Yang sudah dikerjakan (ringkas)
+
+### Scaffolding (Step 0 — sebagian)
+- Folder: `src/api`, `src/ws`, `src/queue`, `src/runner`, `src/analyzer`, `src/storage`, `src/db`, `src/config`, `storage/artifacts`, `storage/fixtures`
+- `package.json` scripts: `dev`, `build`, `start`, `migrate`
+- `tsconfig.json` strict mode (`module`/`moduleResolution`: `nodenext` — TypeScript 7 tidak lagi mendukung `moduleResolution: node`)
+- `.env` aktif (di-ignore git) dan `.env.example` memakai variable DB terpisah, PORT, AUTH_SECRET, key provider LLM
+- `src/api/server.ts` — Fastify kosong + `GET /health` → `{ status: "ok" }` (PORT dari `config`)
+- Node.js di mesin ini diinstall lewat **nvm** (v24 LTS) karena npm sistem belum ada / sudo butuh password
+
+### Config loader (Step 2)
+- `src/config/env.ts` — dotenv + Zod → export `config` strongly-typed
+- Refactor `server.ts` memakai `config.PORT`
+- `src/db/client.ts` memakai field koneksi terpisah dari `config`
+
+### Database migration (Step 1)
+- `src/db/migrations/001_init.sql` — 8 tabel: project, test_case, test_run, artifact, analysis_result, test_step_result, fixture, feature_map
+- `src/db/client.ts` — Pool `pg` dari `DB_HOST/DB_NAME/DB_PORT/DB_USER/DB_PASS`
+- `src/db/migrate.ts` — runner + tabel `_migrations`, idempotent
+- Script: `npm run migrate`
+- Sudah diverifikasi end-to-end terhadap PostgreSQL 16 (cluster sementara di `/tmp`, lalu dihapus)
+
+### Repository layer (Step 3)
+- Repository: project, test-case, test-run, artifact, test-step-result
+- Masing-masing punya `create`, `findById`, `findAll(filter?)`, `update`
+- Query nilai memakai parameter PostgreSQL; nama kolom update dibatasi whitelist
+- Tipe entity/input ada di `src/db/repositories/types.ts`
+- CRUD + filter sudah diuji end-to-end terhadap PostgreSQL 16 sementara
+
+### API server skeleton (Step 4)
+- `src/api/errors.ts` — `ApiError` (statusCode + message) untuk error terkontrol
+- `src/api/error-handler.ts` — global error handler + not-found handler, format `{ error, statusCode }`
+- `src/api/routes/project.routes.ts` — `POST /projects`, `GET /projects/:id` (full, pakai repository)
+- `src/api/routes/testcase.routes.ts` — `POST/GET /projects/:id/test-cases`, `PATCH /test-cases/:id` (full); `POST /test-cases/:id/run` (501, tunggu Step 7/9); `GET /test-cases/:id/runs` (full)
+- `src/api/routes/testrun.routes.ts` — `GET /test-runs/:id` (full, + artifacts; `analysisResult` masih `null` karena repository Fase 2 belum ada); `GET /test-runs/:id/artifacts/:artifactId` (validasi run+artifact ada, lalu 501, tunggu Step 11)
+- `src/api/routes/auth.routes.ts` — `POST /auth/login` (501, tunggu Step 5)
+- Semua route didaftarkan di `server.ts` bareng error handler
+- Sudah diuji end-to-end (sukses, 400, 404, 501, 404-not-found-handler) terhadap database `pointesting`
+
+### Autentikasi personal (Step 5)
+- `src/config/env.ts` — tambah `AUTH_USERNAME`, `AUTH_PASSWORD_HASH` (wajib); tambah `*_MODEL`/`*_MODELS` per provider AI + `config.providers`
+- `scripts/hash-password.ts` — utilitas CLI generate bcrypt hash, jalankan via `npm run hash-password -- "password"`
+- `src/api/auth.middleware.ts` — `signAuthToken()`, `authMiddleware` (preHandler global, skip `/health` & `/auth/login`), augment `FastifyRequest.authUser`
+- `src/api/routes/auth.routes.ts` — implementasi penuh `POST /auth/login` (cek username + `bcrypt.compare`, pesan error sama untuk username/password salah biar tidak bocorkan info)
+- `server.ts` — daftarkan `authMiddleware` sebagai global preHandler hook
+- Sudah diuji end-to-end: akses tanpa token (401), token salah format/invalid (401), login gagal (401/400), login sukses + akses protected route dengan token (sukses), `/health` & `/auth/login` tetap publik
+
+### Test Case CRUD + Zod schema (Step 6)
+- `src/api/schemas/testcase.schema.ts` — enum action resmi 4.1 (`goto/fill/click/check/select/waitFor`) dengan field wajib per action; `steps` ≥1, `expected` array string ≥1
+- Route create/list/patch memakai schema; invalid → 400 dengan path field spesifik (`steps.0.url: ...`)
+- Steps/expected tersimpan & terbaca kembali sebagai JSONB persis format dokumen
+
+### Test Runner Executor (Step 9)
+- `src/runner/executor.ts` — `executeTestRun(testRunId)`: ambil test_run+test_case, status `running`, launch Chromium, context (recordVideo + viewport 1280x720), tracing start (screenshots+snapshots), jalankan `executeSteps`, simpan `test_step_result` per step, tracing stop → `trace.zip`, close context (finalize video) → close browser, hitung status akhir (passed/failed murni dari step), update test_run (status/finishedAt/durationMs)
+- Video+trace di temp dir OS (`os.tmpdir()/ai-testing-tool-runs/<runId>/`), belum dipindah ke storage final (Step 10/11)
+- `queue.ts` — `handleTestRunJob` panggil `executeTestRun` asli (bukan placeholder)
+- Try-catch-finally berlapis: error tak terduga → status `error`; browser/context selalu ditutup; `executeTestRun` tidak pernah throw
+
+### Test Case Compiler (Step 8)
+- `src/runner/types.ts` — `Step` (union goto/fill/click/check/select/waitFor), `StepExecutionResult` (index/action/status/errorMessage/durationMs)
+- `src/runner/testcase-compiler.ts` — `executeSteps(page, steps)`: jalankan berurutan, fail-fast, tidak throw
+- `playwright.config.ts` (root, baru dibuat) — `testDir: ./src`, `testMatch **/__tests__/**/*.spec.ts`, `actionTimeout: 3000`
+- `src/runner/__tests__/fixtures/sample.html` + `testcase-compiler.spec.ts` — 3 test: semua action sukses, fail-fast selector tidak ada, waitFor timeout
+- `package.json` script `test` → `playwright test`; `.gitignore` tambah `test-results/`, `playwright-report/`
+
+### In-Memory Job Queue (Step 7)
+- `src/queue/types.ts` — `TestRunJob`, `AnalysisJob`, union `QueueJob`
+- `src/queue/queue.ts` — `testRunQueue`/`analysisQueue` (`p-queue@6`), `enqueueTestRun`/`enqueueAnalysis` (fire-and-forget), handler placeholder console.log, `getQueueStats()` (running/waiting per queue), `recoverStaleRunningTestRuns()`
+- `src/config/env.ts` — tambah `TEST_RUN_QUEUE_CONCURRENCY` (default 2), `ANALYSIS_QUEUE_CONCURRENCY` (default 3)
+- `server.ts` — panggil `recoverStaleRunningTestRuns()` sebelum `app.listen`
+- `testcase.routes.ts` — `POST /test-cases/:id/run` diimplementasikan penuh (bukan 501 lagi): insert test_run + enqueue, balikan 202
+
+---
+
+## Belum dikerjakan / catatan terbuka
+
+- File placeholder di folder kosong (routes, ws, analyzer, `schema.sql`) belum dibuat — sengaja, menunggu step masing-masing.
+- Video/trace hasil `executeTestRun` masih di temp dir OS, belum dipindah ke `./storage/artifacts/<run_id>/` dan belum ada row `artifact` di DB — itu scope Step 10 (`reporter.ts`/`collectArtifacts`) dan Step 11 (`artifact-storage.ts`).
+- Console log & network log browser (Step 10) belum ditangkap sama sekali di executor — listener `page.on('console'/'request'/'response')` belum dipasang.
+- `handleAnalysisJob` (analysis queue) masih placeholder console.log — analyzer sungguhan Step 19.
+- `.env` lokal sudah dibuat, tetapi nilai `DB_PASS`/`AUTH_SECRET` tetap harus diganti user sesuai environment nyata.
+- Role/user PostgreSQL sistem (`andyresta`) belum dibuat — akses peer auth ke cluster sistem belum tersedia tanpa sudo.
+- Belum ada validasi Zod untuk body request di routes (baru validasi manual dasar) — validasi Zod penuh untuk test case direncanakan di Step 6.
+- `analysis_result` repository belum ada (Fase 2), jadi `GET /test-runs/:id` selalu balikan `analysisResult: null` untuk saat ini.
+- `.env` lokal berisi contoh password (`admin123`, hash bcrypt) dan contoh nama model per provider (`claude-sonnet-4-5`, `gpt-5`, dst.) — hanya untuk dev lokal, WAJIB diganti user sesuai kredensial & model yang benar-benar tersedia di akunnya sebelum dipakai nyata.
+- Validasi Zod body test case sudah ada (Step 6); validasi Zod untuk resource lain (project, auth) masih manual dasar.
+- Belum ada endpoint HTTP untuk expose `getQueueStats()` — fungsinya sudah ada di `queue.ts`, tapi belum diminta jadi route API.
+
+---
+
+## Log sesi (append-only, terbaru di atas)
+
+### 2026-08-15 — Preferensi UI: spinner loading wajib
+- Keputusan: setiap UI + AJAX wajib spinner — di button (aksi proses) atau
+  di tengah halaman (muat halaman). Tercatat di `docs/instruction.md` §9,
+  `.cursor/rules/memory.mdc`, dan preferensi di memory ini.
+
+### 2026-08-15 — docs/instruction.md untuk AI IDE selain Cursor
+- Dikerjakan: `docs/instruction.md` — aturan kerja portable (bahasa, Keterangan,
+  scope, memory, git, keamanan, arsitektur singkat, checklist, template prompt
+  awal) agar bisa di-set sebagai project instructions / AGENTS.md / system
+  prompt di Windsurf, Copilot, Continue, Cline, Aider, Claude Code, dsb.
+- Catatan: di Cursor tetap pakai `.cursor/rules/`; file ini untuk IDE lain.
+
+### 2026-08-15 — Test Runner Executor (Step 9)
+- Keputusan: video/trace disimpan ke temp dir OS dulu (`os.tmpdir()`), BUKAN langsung ke `./storage/artifacts/<run_id>/` — menjaga batas scope dengan Step 10 (collect+relocate+insert artifact row) dan Step 11 (abstraksi storage), sesuai urutan prompt di execution plan.
+- Keputusan: status akhir test_run murni dari keberhasilan step (tidak cek `expected`) — sesuai instruksi eksplisit user, expected jadi tugas AI Analyzer Fase 2.
+- Dikerjakan: `src/runner/executor.ts` (`executeTestRun`), wire `queue.ts` (`handleTestRunJob` panggil executor asli, bukan placeholder).
+- Verifikasi end-to-end via PostgreSQL 16 sementara: run dengan steps valid → status `passed`, semua test_step_result `passed`, file `.webm`+`trace.zip` ada di temp dir; run dengan selector tidak ada → status `failed` setelah timeout Playwright 30s, error message tersimpan; testRunId tidak ada di DB → `executeTestRun` tidak throw, hanya log; tidak ada proses chromium menggantung setelah run selesai (dicek `ps aux`).
+- Follow-up: console/network log listener (Step 10) belum dipasang; artifact belum dipindah ke storage final + belum ada row `artifact` (Step 10/11).
+
+### 2026-08-15 — Katalog model provider dinamis + OpenCode Zen
+- Keputusan: `*_MODELS` bukan sumber utama pilihan UI lagi; hanya fallback.
+- Dikerjakan: `src/analyzer/model-catalog.ts` (discovery kelima provider,
+  timeout 10 detik, cache 5 menit, fallback env), `POST /ai/models`, registrasi
+  route di server, koreksi default/fallback OpenCode menjadi model Zen valid.
+- Keamanan: API key hanya dipakai backend dalam header request provider dan
+  tidak pernah dikirim ke UI.
+- Verifikasi: build/lint OK; katalog publik OpenCode Zen terambil langsung
+  dengan `source=provider` dan 62 model pada saat pengujian.
+- Follow-up: pemanggilan inference OpenCode/adapter analyzer tetap Step 16;
+  saat ini endpoint ini menyiapkan pilihan model dinamis untuk UI.
+
+### 2026-08-15 — Test Case Compiler (Step 8)
+- Keputusan: `playwright.config.ts` akhirnya dibuat sekarang (bukan di Step 0) karena baru butuh nyata untuk menjalankan unit test Playwright Test yang diminta step ini.
+- Dikerjakan: `src/runner/types.ts`, `src/runner/testcase-compiler.ts` (`executeSteps`, fail-fast, tidak throw), fixture HTML lokal, 3 unit test, update `package.json` script `test`, `.gitignore`.
+- Verifikasi: build OK; install browser Chromium lokal (tanpa `--with-deps`, tidak ada akses sudo); `npm test` → 3/3 test lolos (semua action sukses berurutan, fail-fast selector tidak ada, waitFor timeout gagal dengan benar).
+- Follow-up: `executeSteps` belum dipanggil dari executor sungguhan — itu scope Step 9.
+
+### 2026-08-15 — In-Memory Job Queue (Step 7)
+- Keputusan: pakai `p-queue@6.6.2` (bukan versi terbaru v7-9) karena versi terbaru ESM-only, project ini masih CommonJS.
+- Keputusan: `POST /test-cases/:id/run` sekalian diimplementasikan penuh (insert test_run + enqueue + balikan 202/runId) — bukan cuma bikin fungsi queue tanpa dipakai, karena acceptance criteria Step 7 minta "fire and forget dengan id balikan" dan sequence 6.1 sudah jelas menyebut bagian ini di level API.
+- Dikerjakan: `src/queue/types.ts`, `src/queue/queue.ts` (dua named queue + enqueue functions + placeholder handler + `getQueueStats` + `recoverStaleRunningTestRuns`), tambah env concurrency, wire ke `server.ts` startup dan route run.
+- Verifikasi: build OK; end-to-end via PostgreSQL 16 sementara — trigger run balikan 202+runId instan, log placeholder muncul; test manual concurrency=2 dengan 5 job simulasi (slow task) — 2 jalan bersamaan, 3 nunggu, `getQueueStats` akurat; simulasi restart server dengan test_run status `running` → otomatis jadi `error` + `finishedAt` terisi saat startup berikutnya.
+
+### 2026-08-15 — Test Case CRUD + Zod schema (Step 6)
+- Dikerjakan: `testcase.schema.ts` (discriminatedUnion per action 4.1), refactor create/list/patch routes.
+- Verifikasi: create format dokumen OK; invalid action/field → 400 path spesifik; GET mengembalikan struktur sama; PATCH valid/invalid OK.
+
+### 2026-08-15 — Autentikasi personal (JWT) + model per provider di env
+- Keputusan: kredensial personal dari env (`AUTH_USERNAME` + `AUTH_PASSWORD_HASH`), tanpa tabel user; JWT 7 hari; global preHandler hook kecuali `/health` & `/auth/login`.
+- Keputusan: env provider AI diperluas dari sekadar `*_API_KEY` jadi juga `*_MODEL` (default) + `*_MODELS` (daftar pilihan CSV), diekspos rapi lewat `config.providers`.
+- Dikerjakan: `auth.middleware.ts`, implementasi `POST /auth/login`, `scripts/hash-password.ts`, update `env.ts`/`.env`/`.env.example`.
+- Verifikasi: build OK; login sukses/gagal, akses protected route dengan/tanpa/token-salah semua sesuai ekspektasi (401/200/201).
+
+### 2026-08-15 — API server skeleton (routes + error handler)
+- Dikerjakan: `project.routes.ts`, `testcase.routes.ts`, `testrun.routes.ts`, `auth.routes.ts`, `errors.ts`, `error-handler.ts`; didaftarkan di `server.ts`.
+- Keputusan: endpoint yang komponennya belum ada di-throw `ApiError(501, ...)` (bukan silently sukses), agar jelas mana yang masih placeholder.
+- Verifikasi: build OK; seluruh endpoint diuji manual (sukses/400/404/501/404-not-found) terhadap database `pointesting`, lalu data uji dibersihkan.
+
+### 2026-08-15 — Repository layer + konfigurasi DB terpisah
+- Keputusan: connection string `DATABASE_URL` diganti field `DB_HOST/DB_NAME/DB_PORT/DB_USER/DB_PASS`; DB bernama `pointesting`.
+- Dikerjakan: lima repository CRUD/filter + tipe entity + helper parameterized update.
+- Verifikasi: build/lint OK dan CRUD repository lulus terhadap PostgreSQL 16 sementara.
+
+### 2026-08-15 — Config env (Zod) + refactor server
+- Dikerjakan: `src/config/env.ts`, refactor `server.ts` pakai `config.PORT`.
+- Verifikasi: build OK; missing `AUTH_SECRET` → exit 1 + pesan jelas; PORT default 3000; `/health` OK.
+
+### 2026-08-15 — Scaffolding + migration + memory
+- User minta scaffolding sesuai arsitektur; awalnya dibuat di subfolder `ai-testing-tool/`, lalu diminta dipindah ke root sejajar `docs/`.
+- User minta sistem migration SQL + client + migrate runner.
+- User minta `docs/memory.md` + instruction agar setiap sesi baca & update memory.
+
+---
+
+## Template entri log (salin saat menambah)
+
+```
+### YYYY-MM-DD — judul singkat
+- Keputusan:
+- Dikerjakan:
+- Blocker / follow-up:
+```

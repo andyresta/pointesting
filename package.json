@@ -1,0 +1,38 @@
+{
+  "name": "ai-testing-tool",
+  "version": "1.0.0",
+  "description": "",
+  "main": "dist/api/server.js",
+  "scripts": {
+    "dev": "tsx watch src/api/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/api/server.js",
+    "migrate": "tsx src/db/migrate.ts",
+    "hash-password": "tsx scripts/hash-password.ts",
+    "test": "playwright test"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@playwright/test": "^1.62.1",
+    "bcrypt": "^6.0.0",
+    "dotenv": "^17.4.2",
+    "fastify": "^5.12.0",
+    "jsonwebtoken": "^9.0.3",
+    "p-queue": "^6.6.2",
+    "pg": "^8.23.0",
+    "ws": "^8.21.3",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/bcrypt": "^6.0.0",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^26.2.0",
+    "@types/pg": "^8.21.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.23.12",
+    "typescript": "^7.0.2"
+  }
+}
