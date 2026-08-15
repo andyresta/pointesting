@@ -205,6 +205,10 @@ Dokumen ini menyimpan **konteks percakapan lintas sesi**. Dibaca di awal setiap 
 
 ## Log sesi (append-only, terbaru di atas)
 
+### 2026-08-15 — README.md proyek
+- Dikerjakan: `README.md` root — deskripsi alat automate testing web + AI,
+  status WIP, yang sudah/belum, setup cepat, pointer ke docs.
+
 ### 2026-08-15 — Preferensi UI: spinner loading wajib
 - Keputusan: setiap UI + AJAX wajib spinner — di button (aksi proses) atau
   di tengah halaman (muat halaman). Tercatat di `docs/instruction.md` §9,
