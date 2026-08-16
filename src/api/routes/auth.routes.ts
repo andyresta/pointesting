@@ -1,6 +1,6 @@
 import bcrypt from 'bcrypt';
 import type { FastifyInstance } from 'fastify';
-import { signAuthToken } from '../auth.middleware';
+import { AUTH_COOKIE_NAME, signAuthToken } from '../auth.middleware';
 import { config } from '../../config/env';
 import { ApiError } from '../errors';
 
@@ -17,7 +17,7 @@ interface LoginBody {
  * yang dipakai untuk mengakses route lain lewat header Authorization.
  */
 export async function authRoutes(app: FastifyInstance): Promise<void> {
-  app.post('/auth/login', async (request) => {
+  app.post('/auth/login', async (request, reply) => {
     const body = request.body as LoginBody | undefined;
 
     if (typeof body?.username !== 'string' || body.username.trim() === '') {
@@ -39,6 +39,10 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const token = signAuthToken(body.username);
+    reply.header(
+      'Set-Cookie',
+      `${AUTH_COOKIE_NAME}=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=604800`,
+    );
 
     return { token, tokenType: 'Bearer', expiresIn: '7d' };
   });

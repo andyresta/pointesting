@@ -10,14 +10,14 @@ Referensi: `roadmap-ai-testing-tool.md`, `arsitektur-spesifikasi-teknis.md`, `ex
 
 | | |
 |---|---|
-| Fase saat ini | Fase 1 |
-| Step aktif | Step 10 |
-| Progress Fase 1 | 9 / 15 step selesai |
-| Progress Fase 2 | 0 / 8 step selesai |
+| Fase saat ini | Fase 2 |
+| Step aktif | Step 18 |
+| Progress Fase 1 | 15 / 15 step selesai |
+| Progress Fase 2 | 3 / 8 step selesai |
 | Progress Fase 3 | 0 / 4 step selesai |
 | Progress Fase 4 | 0 / 3 step selesai |
 | Progress Fase 5 | 0 / 4 step selesai |
-| Terakhir diupdate | 2026-08-15 |
+| Terakhir diupdate | 2026-08-16 |
 
 ---
 
@@ -42,22 +42,22 @@ Referensi: `roadmap-ai-testing-tool.md`, `arsitektur-spesifikasi-teknis.md`, `ex
 | 4 | API Server Skeleton (Fastify) | Done | 2026-08-15 | 2026-08-15 | Endpoint queue/artifact-storage/auth masih placeholder 501, sesuai rencana Step 5/7/9/11 |
 | 5 | Autentikasi Personal | Done | 2026-08-15 | 2026-08-15 | JWT 7 hari, credential dari env (tanpa tabel user) |
 | 6 | Test Case CRUD API | Done | 2026-08-15 | 2026-08-15 | Zod schema action 4.1; invalid body → 400 field-spesifik |
-| 7 | In-Memory Job Queue | Done | 2026-08-15 | 2026-08-15 | `p-queue` (v6, CJS); handler masih placeholder console.log sampai Step 9/19 |
+| 7 | In-Memory Job Queue | Done | 2026-08-15 | 2026-08-15 | `p-queue` (v6, CJS); testRun handler aktif, analysis placeholder sampai Step 19 |
 | 8 | Test Case Compiler (JSON → Playwright Actions) | Done | 2026-08-15 | 2026-08-15 | `executeSteps` fail-fast; 3 unit test Playwright Test lolos terhadap fixture HTML lokal |
-| 9 | Test Runner Executor (Playwright) | Done | 2026-08-15 | 2026-08-15 | `executeTestRun` terhubung ke testRunQueue; video+trace tersimpan di temp dir; diuji end-to-end (passed/failed/not-found) |
-| 10 | Custom Reporter & Artifact Collector | Planning | | | |
-| 11 | Artifact Storage (Filesystem) | Planning | | | |
-| 12 | Screencast Live View + WebSocket Gateway | Planning | | | |
-| 13 | Dashboard Dasar (UI) | Planning | | | |
-| 14 | Integrasi & Testing End-to-End Fase 1 | Planning | | | |
+| 9 | Test Runner Executor (Playwright) | Done | 2026-08-15 | 2026-08-15 | `executeTestRun` terhubung ke testRunQueue; artifact diproses reporter ke storage final |
+| 10 | Custom Reporter & Artifact Collector | Done | 2026-08-15 | 2026-08-15 | Console/network log JSON + video/trace dikumpulkan; empat row artifact tersimpan |
+| 11 | Artifact Storage (Filesystem) | Done | 2026-08-15 | 2026-08-15 | Storage layer aman + streaming artifact dengan Content-Type sesuai |
+| 12 | Screencast Live View + WebSocket Gateway | Done | 2026-08-15 | 2026-08-15 | JWT handshake code 4001; pub/sub terisolasi per runId; Chromium CDP screencast JPEG 640x360 quality 50 |
+| 13 | Dashboard Dasar (UI) | Done | 2026-08-15 | 2026-08-15 | EJS + HTMX; login, Run + spinner, live frame/status/step, video dan trace setelah selesai |
+| 14 | Integrasi & Testing End-to-End Fase 1 | Done | 2026-08-16 | 2026-08-16 | Dashboard → live frame → passed → video/trace/log; `base_url` + resync WS + recovery queued; isi empat artifact tervalidasi |
 
 ### Fase 2 — AI Analyzer (MVP Inti)
 
 | # | Step | Status | Tanggal Mulai | Tanggal Selesai | Catatan |
 |---|---|---|---|---|---|
-| 15 | Trace Parser | Planning | | | |
-| 16 | Provider Interface & Adapters (Multi-AI) | Planning | | | |
-| 17 | Prompt Builder | Planning | | | |
+| 15 | Trace Parser | Done | 2026-08-16 | 2026-08-16 | ZIP streaming; action/timing/error bounded ≤20 action tanpa snapshot/network mentah |
+| 16 | Provider Interface & Adapters (Multi-AI) | Done | 2026-08-16 | 2026-08-16 | LLMClient + AnalyzerProvider untuk Claude/OpenAI/DeepSeek/Kimi/OpenCode; ProviderError + output konsisten |
+| 17 | Prompt Builder | Done | 2026-08-16 | 2026-08-16 | Filter/dedup console+network, sanitasi URL, trace + screenshot opsional; E2E AnalyzerInput valid |
 | 18 | Analyzer Service (Provider Selection + Fallback) | Planning | | | |
 | 19 | Integrasi Analyzer ke Queue | Planning | | | |
 | 20 | Update Dashboard untuk Analysis Result | Planning | | | |
@@ -96,7 +96,46 @@ Referensi: `roadmap-ai-testing-tool.md`, `arsitektur-spesifikasi-teknis.md`, `ex
 
 Format: `YYYY-MM-DD` — deskripsi perubahan (keputusan, scope, atau step yang selesai).
 
+### 2026-08-16
+- Step 16–17 selesai: kontrak `LLMClient`, `AnalyzerProvider`,
+  `AnalyzerInput`, `AnalysisResult`, histori/healing, dan `ProviderError`
+  diimplementasikan. Lima adapter memakai API resmi: Claude Messages, OpenAI
+  Chat Completions, DeepSeek text-only, Kimi vision, serta OpenCode Zen
+  multi-protocol berdasarkan keluarga model (Messages/Responses/Gemini/Chat).
+  `STATUS_DEFINITIONS` terpusat dan output semua adapter dinormalisasi.
+  `buildAnalyzerInput` memfilter/dedup console error-warning, network status
+  error/response >3 detik, menghapus query URL, memparse trace, dan mengambil
+  screenshot opsional. Build lolos, 18 test lulus, dan E2E membuktikan input
+  analyzer terbentuk dari artifact nyata tanpa call provider berbayar.
+- Step 14 selesai: review Fase 1 memastikan nama tabel/kolom repository selaras
+  migration, payload WS sesuai kontrak, dan raw `process.env` hanya ada di
+  config loader. Temuan audit diperbaiki: `project.base_url` dipakai sebagai
+  Playwright `baseURL` untuk `goto` relatif, dashboard melakukan resync/polling
+  status bila event WS terlewat, recovery startup juga menutup `queued`, serta
+  panel final menyediakan unduhan video/trace/console/network via Bearer+blob.
+  Ditambahkan `npm run test:e2e:phase1` yang menjalankan skenario `/login`
+  relatif, live frame, passed, dan validasi isi empat artifact; data uji
+  dibersihkan otomatis.
+- Step 15 selesai: `parseTrace(traceZipPath)` membaca entry `.trace` langsung
+  dari ZIP secara streaming, memasangkan event before/after berdasarkan
+  callId, dan menghasilkan action/timing/error ringkas tanpa snapshot HTML
+  atau network mentah. Output dibatasi 20 action dan teks dipotong agar tetap
+  sekitar <2000 token. Build lolos dan seluruh 10 test lulus.
+
 ### 2026-08-15
+- Step 12–13 selesai: gateway WebSocket `/ws` mewajibkan JWT query token,
+  menolak token invalid dengan close code 4001, dan mengisolasi subscriber per
+  runId. Screencast memakai CDP fallback Playwright dengan frame JPEG 640x360
+  quality 50. Dashboard EJS + HTMX menyediakan login, daftar project/test case,
+  Run tanpa reload, live frame/status/step, lalu video player dan link trace.
+  Build lolos; 8 test lolos; verifikasi frame screencast nyata dan isolasi WS
+  berhasil.
+- Step 10–11 selesai: executor menangkap console/network event sebagai JSON
+  terstruktur, reporter memindahkan video/trace/log ke
+  `storage/artifacts/<runId>/` dan menyimpan metadata/size ke DB. Storage layer
+  mendukung Buffer/source path, proteksi path traversal, serta ReadStream.
+  Endpoint artifact sekarang streaming file dengan Content-Type sesuai.
+  Verifikasi E2E menghasilkan empat artifact valid dan seluruh download 200.
 - Step 9 selesai: `src/runner/executor.ts` (`executeTestRun(testRunId)`) — ambil test_run/test_case, set status `running`, launch Chromium, buka context (`recordVideo` + viewport 1280x720), mulai tracing (`screenshots`+`snapshots`), jalankan `executeSteps` (Step 8), simpan tiap hasil ke `test_step_result`, stop tracing → `trace.zip`, tutup context (finalize video), tutup browser, hitung status akhir murni dari keberhasilan step (`passed`/`failed`), lalu update `test_run` (status/finished_at/duration_ms). Video+trace disimpan di temp dir OS dulu (`os.tmpdir()/ai-testing-tool-runs/<runId>/`) — pemindahan ke `./storage/artifacts/<run_id>/` + insert row `artifact` tetap scope Step 10/11. `testRunQueue` (Step 7) sekarang memanggil `executeTestRun` sungguhan (bukan placeholder lagi). Try-catch-finally menyeluruh: error tak terduga → status `error`, browser/context selalu ditutup di `finally`, `executeTestRun` tidak pernah throw ke worker queue.
 - Katalog model provider dibuat dinamis: endpoint internal `POST /ai/models`
   mengambil model langsung dari endpoint resmi Claude/OpenAI/DeepSeek/Kimi/

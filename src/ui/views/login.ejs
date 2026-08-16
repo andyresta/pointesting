@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Login — Pointesting</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+    <script src="/vendor/htmx/htmx.min.js" defer></script>
+    <script src="/assets/login.js" defer></script>
+  </head>
+  <body class="auth-page" hx-boost="true">
+    <main class="auth-card">
+      <p class="eyebrow">Pointesting</p>
+      <h1>Masuk ke dashboard</h1>
+      <p class="muted">Gunakan credential personal yang dikonfigurasi pada server.</p>
+
+      <form id="login-form" class="stack">
+        <label>
+          Username
+          <input id="username" name="username" type="text" autocomplete="username" required />
+        </label>
+        <label>
+          Password
+          <input
+            id="password"
+            name="password"
+            type="password"
+            autocomplete="current-password"
+            required
+          />
+        </label>
+        <p id="login-error" class="alert" role="alert" hidden></p>
+        <button id="login-button" type="submit">
+          <span class="button-label">Masuk</span>
+          <span class="spinner spinner-small" aria-hidden="true" hidden></span>
+        </button>
+      </form>
+    </main>
+  </body>
+</html>

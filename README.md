@@ -3,7 +3,7 @@
 Alat **automate testing web apps** yang dibantu **AI**: menjalankan test case lewat browser (Playwright), merekam hasil, lalu (nanti) menganalisis kegagalan dengan multi-provider LLM.
 
 > **Status: masih dalam pengembangan (WIP).**  
-> Saat ini fokus **Fase 1 — fondasi eksekusi & rekam**. Belum production-ready. UI dashboard, live view WebSocket, dan AI Analyzer belum selesai.
+> **Fase 1 sudah selesai dan terverifikasi end-to-end.** Saat ini fokus **Fase 2 — AI Analyzer**. Belum production-ready.
 
 Repo: [andyresta/pointesting](https://github.com/andyresta/pointesting)
 
@@ -15,15 +15,17 @@ Repo: [andyresta/pointesting](https://github.com/andyresta/pointesting)
 - PostgreSQL: project, test case, test run, step result, artifact (schema)
 - Validasi test case (Zod) + CRUD
 - In-memory job queue (`p-queue`)
-- Eksekusi Playwright: steps → browser, video & trace sementara, update status run
+- Eksekusi Playwright: steps → browser, update status dan hasil per-step
+- Artifact final: video, trace, console log, network log + endpoint streaming
+- Live browser view melalui WebSocket + dashboard EJS/HTMX
+- Trace parser ringkas untuk input AI Analyzer
+- Provider adapter Claude/OpenAI/DeepSeek/Kimi/OpenCode + prompt builder terpusat
 - Katalog model AI dinamis (`POST /ai/models`) untuk Claude / OpenAI / DeepSeek / Kimi / OpenCode Zen
 
 ## Yang masih dikerjakan / belum ada
 
-- Collect artifact ke `./storage/artifacts/` + download endpoint
-- Screencast live view + WebSocket
-- Dashboard UI
-- AI Analyzer (klasifikasi hasil + saran perbaikan)
+- Analyzer service, fallback provider, dan penyimpanan hasil analysis
+- Klasifikasi hasil serta saran perbaikan di dashboard
 - Test generation, self-healing selector, fixture & feature map (fase berikutnya)
 
 Progress detail: [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md)
@@ -41,6 +43,8 @@ Progress detail: [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md)
 | Queue | In-memory `p-queue` |
 | Validasi | Zod |
 | Auth | JWT + bcrypt (single-user dari env) |
+| Dashboard | EJS + HTMX |
+| Realtime | WebSocket (`ws`) |
 
 ---
 
@@ -81,7 +85,8 @@ Health check: `GET /health` → `{ "status": "ok" }`
 | `npm start` | Jalankan hasil build |
 | `npm run migrate` | Jalankan migrasi DB |
 | `npm run hash-password -- "..."` | Generate bcrypt hash |
-| `npm test` | Unit test Playwright (compiler) |
+| `npm test` | Seluruh unit/integration test |
+| `npm run test:e2e:phase1` | Verifikasi dashboard → live run → artifact |
 
 ---
 

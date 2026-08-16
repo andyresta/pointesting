@@ -1,6 +1,10 @@
 import type { Page } from '@playwright/test';
 import type { Step, StepExecutionResult } from './types';
 
+export type StepCompleteHandler = (
+  result: StepExecutionResult,
+) => void | Promise<void>;
+
 /**
  * Keterangan: Menjalankan satu step terhadap Playwright `page` sesuai
  * pemetaan action → API Playwright (goto/fill/click/check/select/waitFor).
@@ -35,12 +39,13 @@ async function runStep(page: Page, step: Step): Promise<void> {
  * paralel — urutan step penting untuk hasil test case) terhadap `page`.
  * Tiap step dicatat index, action, status, errorMessage, dan durationMs.
  * Begitu satu step gagal, eksekusi step berikutnya dihentikan (fail fast),
- * tapi fungsi ini tidak pernah throw — hasil sampai step yang gagal tetap
- * dikembalikan sebagai array.
+ * tapi error Playwright tidak dilempar — hasil sampai step yang gagal tetap
+ * dikembalikan. Callback opsional dipanggil segera setelah tiap step selesai.
  */
 export async function executeSteps(
   page: Page,
   steps: Step[],
+  onStepComplete?: StepCompleteHandler,
 ): Promise<StepExecutionResult[]> {
   const results: StepExecutionResult[] = [];
 
@@ -48,23 +53,30 @@ export async function executeSteps(
     const step = steps[index]!;
     const startedAt = Date.now();
 
+    let result: StepExecutionResult;
     try {
       await runStep(page, step);
-      results.push({
+      result = {
         index,
         action: step.action,
         status: 'passed',
         errorMessage: null,
         durationMs: Date.now() - startedAt,
-      });
+      };
     } catch (error) {
-      results.push({
+      result = {
         index,
         action: step.action,
         status: 'failed',
         errorMessage: error instanceof Error ? error.message : String(error),
         durationMs: Date.now() - startedAt,
-      });
+      };
+    }
+
+    results.push(result);
+    await onStepComplete?.(result);
+
+    if (result.status === 'failed') {
       break;
     }
   }

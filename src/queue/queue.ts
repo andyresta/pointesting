@@ -85,11 +85,15 @@ export function getQueueStats(): { testRun: QueueStats; analysis: QueueStats } {
  * Keterangan: Dipanggil sekali saat server startup. Job in-memory hilang
  * setiap kali proses restart (trade-off MVP, lihat spesifikasi bagian 7
  * baris "Persistensi job"), jadi test_run yang statusnya masih 'running'
- * dari sesi sebelumnya di-mark 'error' agar tidak menggantung selamanya di UI.
- * Mengembalikan jumlah test_run yang di-recover.
+ * ATAU 'queued' dari sesi sebelumnya di-mark 'error' agar tidak menggantung
+ * selamanya di UI. Mengembalikan jumlah test_run yang di-recover.
  */
 export async function recoverStaleRunningTestRuns(): Promise<number> {
-  const staleRuns = await testRunRepository.findAll({ status: 'running' });
+  const [staleRunning, staleQueued] = await Promise.all([
+    testRunRepository.findAll({ status: 'running' }),
+    testRunRepository.findAll({ status: 'queued' }),
+  ]);
+  const staleRuns = [...staleRunning, ...staleQueued];
 
   for (const run of staleRuns) {
     await testRunRepository.update(run.id, {
@@ -100,7 +104,7 @@ export async function recoverStaleRunningTestRuns(): Promise<number> {
 
   if (staleRuns.length > 0) {
     console.log(
-      `[queue] ${staleRuns.length} test_run berstatus 'running' dari sesi sebelumnya di-mark 'error' (server restart).`,
+      `[queue] ${staleRuns.length} test_run berstatus 'running'/'queued' dari sesi sebelumnya di-mark 'error' (server restart).`,
     );
   }
 

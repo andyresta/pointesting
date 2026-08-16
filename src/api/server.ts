@@ -1,10 +1,16 @@
+import fastifyStatic from '@fastify/static';
+import fastifyView from '@fastify/view';
+import ejs from 'ejs';
 import Fastify from 'fastify';
+import * as path from 'node:path';
 import { authMiddleware } from './auth.middleware';
 import { config } from '../config/env';
 import { registerErrorHandler } from './error-handler';
 import { recoverStaleRunningTestRuns } from '../queue/queue';
+import { registerWebSocketGateway } from '../ws/gateway';
 import { aiRoutes } from './routes/ai.routes';
 import { authRoutes } from './routes/auth.routes';
+import { dashboardRoutes } from './routes/dashboard.routes';
 import { projectRoutes } from './routes/project.routes';
 import { testCaseRoutes } from './routes/testcase.routes';
 import { testRunRoutes } from './routes/testrun.routes';
@@ -15,10 +21,24 @@ import { testRunRoutes } from './routes/testrun.routes';
  * endpoint health check, dan seluruh route resource sesuai
  * docs/arsitektur-spesifikasi-teknis.md bagian "5. Spesifikasi API (REST)".
  */
-function buildServer() {
+export function buildServer() {
   const app = Fastify({ logger: true });
+  const projectRoot = path.resolve(__dirname, '../..');
 
   registerErrorHandler(app);
+  app.register(fastifyView, {
+    engine: { ejs },
+    root: path.join(projectRoot, 'src', 'ui', 'views'),
+  });
+  app.register(fastifyStatic, {
+    root: path.join(projectRoot, 'src', 'ui', 'public'),
+    prefix: '/assets/',
+  });
+  app.register(fastifyStatic, {
+    root: path.join(projectRoot, 'node_modules', 'htmx.org', 'dist'),
+    prefix: '/vendor/htmx/',
+    decorateReply: false,
+  });
   app.addHook('preHandler', authMiddleware);
 
   app.get('/health', async () => {
@@ -30,6 +50,8 @@ function buildServer() {
   app.register(testRunRoutes);
   app.register(aiRoutes);
   app.register(authRoutes);
+  app.register(dashboardRoutes);
+  registerWebSocketGateway(app);
 
   return app;
 }
@@ -52,4 +74,6 @@ async function start() {
   }
 }
 
-start();
+if (require.main === module) {
+  void start();
+}

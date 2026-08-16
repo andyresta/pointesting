@@ -26,10 +26,10 @@ Dokumen ini menyimpan **konteks percakapan lintas sesi**. Dibaca di awal setiap 
 |---|---|
 | Nama project | `ai-testing-tool` (di repo `pointesting`) |
 | Root kode | sejajar dengan `docs/` (bukan subfolder `ai-testing-tool/`) |
-| Stack | Node.js + TypeScript (strict), Fastify, `ws`, `pg`, `dotenv`, `zod`, `@playwright/test` |
+| Stack | Node.js + TypeScript (strict), Fastify, `ws`, `pg`, `dotenv`, `zod`, `@playwright/test`, EJS + HTMX, `yauzl` |
 | Package manager | npm |
-| Fase roadmap | Fase 1 (fondasi) |
-| Progress scaffolding | Step 1–9 selesai; `playwright.config.ts` sudah dibuat di Step 8 |
+| Fase roadmap | Fase 2 (AI Analyzer) |
+| Progress scaffolding | Step 1–17 selesai; Fase 1 sudah lulus E2E |
 
 ---
 
@@ -53,15 +53,23 @@ Dokumen ini menyimpan **konteks percakapan lintas sesi**. Dibaca di awal setiap 
 - Endpoint yang komponennya belum ada (queue, artifact-storage, auth) di-throw `ApiError(501, ...)` dengan pesan yang menyebut step mana yang akan mengimplementasikannya.
 - Semua error API (terkontrol maupun tak terduga) dan 404 route memakai format konsisten `{ error: string, statusCode: number }` lewat global error handler.
 - Autentikasi personal/single-user: credential (`AUTH_USERNAME` + `AUTH_PASSWORD_HASH` bcrypt) dari env, TANPA tabel user di database.
-- Login berhasil → JWT signed `AUTH_SECRET`, masa berlaku 7 hari. Dikirim via header `Authorization: Bearer <token>`.
-- Semua route wajib token JWT KECUALI `GET /health` dan `POST /auth/login` (global preHandler hook).
+- Login berhasil → JWT signed `AUTH_SECRET`, masa berlaku 7 hari. Dikirim via
+  header `Authorization: Bearer <token>`; login dashboard juga menyetel cookie
+  HttpOnly SameSite=Strict agar route halaman/video dapat diautentikasi browser.
+- Semua route data wajib JWT. Public: `GET /health`, `POST /auth/login`,
+  `GET /dashboard/login`, serta asset statis dashboard.
 - `bcrypt` (native, pakai prebuilt binary — tidak perlu compile) dan `jsonwebtoken` dipakai untuk hashing & JWT.
 - Tiap provider AI di env sekarang juga punya `*_MODEL` (default aktif) dan `*_MODELS` (daftar pilihan, CSV) selain `*_API_KEY` — di-expose sebagai `config.providers.<nama>` yang sudah dirapikan (apiKey/defaultModel/availableModels).
 - In-memory queue pakai `p-queue@6.6.2` (BUKAN versi terbaru) — p-queue v7+ ESM-only, sedangkan project ini `"type": "commonjs"`. Kalau mau upgrade p-queue nanti, harus pindah project ke ESM dulu atau pakai dynamic import.
 - Dua named queue: `testRunQueue` (concurrency env `TEST_RUN_QUEUE_CONCURRENCY`, default 2) dan `analysisQueue` (`ANALYSIS_QUEUE_CONCURRENCY`, default 3).
-- `POST /test-cases/:id/run` sudah full (bukan 501 lagi): insert `test_run` status `queued` → `enqueueTestRun` → balikan `202 { runId, status }`. Isi job (`handleTestRunJob`) masih placeholder console.log sampai Step 9.
+- `POST /test-cases/:id/run` sudah full: insert `test_run` status `queued` →
+  `enqueueTestRun` → balikan `202 { runId, status }`; queue worker menjalankan
+  `executeTestRun` sungguhan.
 - Server startup memanggil `recoverStaleRunningTestRuns()` (di `src/queue/queue.ts`) sebelum `app.listen` — test_run status `running` dari sesi sebelumnya di-mark `error` + `finishedAt` terisi.
-- `src/runner/testcase-compiler.ts` (`executeSteps`) fail-fast: satu step gagal → step berikutnya tidak dijalankan, tapi fungsi tetap mengembalikan array hasil (tidak pernah throw).
+- `src/runner/testcase-compiler.ts` (`executeSteps`) fail-fast: error step
+  Playwright dikembalikan sebagai hasil failed (bukan throw). Callback opsional
+  Step 12 dipanggil segera per step; error infrastruktur dari callback boleh
+  diteruskan ke executor agar run menjadi `error`.
 - Unit test compiler pakai `@playwright/test` sungguhan (bukan mock) terhadap fixture HTML lokal via `file://` URL — tidak perlu web server. `playwright.config.ts` set `actionTimeout: 3000ms` supaya skenario gagal (selector tidak ada) tidak nunggu default 30s.
 - Browser Playwright (Chromium) diinstall via `npx playwright install chromium` (TANPA `--with-deps`, karena install system deps butuh sudo yang tidak tersedia di mesin ini). Kalau pindah mesin/CI, install ulang browser dulu sebelum `npm test`.
 - `npm test` sekarang menjalankan `playwright test` (sebelumnya placeholder error).
@@ -99,6 +107,56 @@ Dokumen ini menyimpan **konteks percakapan lintas sesi**. Dibaca di awal setiap 
   untuk `npm test` (`playwright test`). `executor.ts` memanggil
   `chromium.launch()` langsung (bukan lewat test runner), jadi timeout
   default Playwright (30s per action) yang berlaku di sana, bukan 3000ms.
+- Artifact final disimpan melalui `src/storage/artifact-storage.ts` ke
+  `storage/artifacts/<runId>/`; path DB selalu relatif project. Source path
+  dipindahkan dengan copy+unlink agar aman lintas filesystem (`/tmp` → repo).
+- `src/runner/reporter.ts` mengubah nama video dinamis Playwright menjadi
+  `video.webm`, memindahkan trace/log, lalu insert row artifact + size file.
+- `GET /test-runs/:id/artifacts/:artifactId` sudah streaming file dengan
+  Content-Type: video/webm, application/zip, application/json, atau image/png.
+- Gateway WS berada di `/ws`; handshake wajib query `?token=<JWT>`. Token
+  invalid/tidak ada ditutup code 4001 sebelum listener subscribe dipasang.
+  Subscriber disimpan per runId dan dibersihkan saat unsubscribe/socket close.
+- Playwright 1.62 belum mengekspos `page.screencast` di API publik/types, jadi
+  live view memakai CDP `Page.startScreencast`: JPEG quality 50, maksimum
+  640x360, setiap frame di-ack dan dibroadcast sebagai `run:frame`.
+- Dashboard Step 13 memakai EJS + HTMX dari Fastify (`@fastify/view` dan
+  `@fastify/static`), dengan halaman login serta `/dashboard`. JWT disimpan di
+  `sessionStorage` untuk Authorization fetch dan query handshake WS; cookie
+  HttpOnly tetap dipakai untuk navigasi dan media artifact.
+- Executor memakai `project.baseUrl` sebagai Playwright `baseURL` supaya step
+  `goto` relatif (`/login`) sesuai kontrak spesifikasi 4.1.
+- Dashboard live view melakukan resync REST + polling 2 detik setelah subscribe
+  agar status terminal tidak hilang bila event WS sudah lewat; unduhan artifact
+  memakai fetch Bearer + blob URL (video/trace/console/network).
+- Recovery startup menandai `running` dan `queued` lama sebagai `error` karena
+  job in-memory hilang saat restart.
+- E2E Fase 1 dibuat repeatable lewat `npm run test:e2e:phase1`: server aplikasi
+  dan target web memakai port acak, JWT dibuat internal tanpa dicetak, lalu
+  project/test case/run/artifact uji selalu dibersihkan.
+- Trace parser memakai `yauzl` dengan lazy entry streaming. Hanya entry
+  `.trace` diproses; `trace.network`, resources, dan snapshot HTML tidak masuk
+  ringkasan karena network log sudah menjadi artifact terpisah.
+- `TraceSummary` dibatasi maksimal 20 action; nama/error dipotong dan event
+  sangat besar dilewati agar JSON tetap sekitar <2000 token. Event before/after
+  dipasangkan melalui `callId`; timing berasal dari startTime/endTime trace.
+- Provider layer memiliki dua kontrak: `LLMClient.complete()` generik untuk
+  Fase 2/3/5 dan `AnalyzerProvider.analyze()` khusus klasifikasi Fase 2.
+- Dukungan image: Claude/OpenAI/Kimi `true`; DeepSeek `false`; OpenCode Zen
+  konservatif `false` karena kemampuan vision berbeda antar-model. Screenshot
+  selalu diabaikan aman oleh provider text-only.
+- OpenCode Zen dirutekan berdasarkan keluarga model: Claude → `/messages`,
+  GPT/Grok → `/responses`, Gemini → `generateContent`, model lain →
+  `/chat/completions`. Ini menjaga pilihan model dinamis tidak dipaksa ke satu
+  protokol yang salah.
+- Semua kegagalan network, HTTP/rate-limit, config kosong, dan output invalid
+  dinormalkan sebagai `ProviderError` dengan provider/status/retryable untuk
+  fallback Step 18.
+- `STATUS_DEFINITIONS` hanya ada di `prompt-builder.ts`; semua adapter memakai
+  definisi success/fail/bug/anomaly dan schema output yang sama.
+- Prompt builder hanya memasukkan console error/warning dan network status
+  0/>=400 atau response >3000ms; duplikat dihitung, query/hash URL dihapus,
+  item/text dibatasi, trace diparse, screenshot opsional maksimal dua.
 
 ---
 
@@ -167,20 +225,68 @@ Dokumen ini menyimpan **konteks percakapan lintas sesi**. Dibaca di awal setiap 
 
 ### Test Runner Executor (Step 9)
 - `src/runner/executor.ts` — `executeTestRun(testRunId)`: ambil test_run+test_case, status `running`, launch Chromium, context (recordVideo + viewport 1280x720), tracing start (screenshots+snapshots), jalankan `executeSteps`, simpan `test_step_result` per step, tracing stop → `trace.zip`, close context (finalize video) → close browser, hitung status akhir (passed/failed murni dari step), update test_run (status/finishedAt/durationMs)
-- Video+trace di temp dir OS (`os.tmpdir()/ai-testing-tool-runs/<runId>/`), belum dipindah ke storage final (Step 10/11)
+- Video+trace awalnya dibuat di temp dir OS, lalu dikumpulkan ke storage final
+  oleh reporter Step 10–11.
 - `queue.ts` — `handleTestRunJob` panggil `executeTestRun` asli (bukan placeholder)
 - Try-catch-finally berlapis: error tak terduga → status `error`; browser/context selalu ditutup; `executeTestRun` tidak pernah throw
 
+### Reporter + Artifact Storage (Step 10–11)
+- `executor.ts` — capture console `{type,text,timestamp}` dan network
+  `{url,method,status,responseTimeMs,timestamp}`; request gagal memakai status 0
+- `src/runner/reporter.ts` — `collectArtifacts()` pindahkan video/trace/log ke
+  final storage via storage layer, lalu insert metadata/size ke DB
+- `src/storage/artifact-storage.ts` — `getArtifactDir`, `saveArtifact`,
+  `getArtifactStream`; path traversal ditolak
+- Route artifact tidak lagi 501: validasi run+artifact, lalu stream dengan
+  Content-Type yang sesuai
+- Unit test storage: Buffer, source path, ReadStream, dan path traversal
+
+### Live View + Dashboard (Step 12–13)
+- `src/ws/events.ts` — kontrak event run status/frame/step/analysis dan
+  subscribe/unsubscribe.
+- `src/ws/gateway.ts` — JWT handshake, Map subscriber per runId,
+  `broadcastToRun`, cleanup subscription.
+- `src/runner/screencast.ts` — CDP screencast controller; executor broadcast
+  status dan hasil step serta selalu stop screencast sebelum context ditutup.
+- `src/ui/` + `dashboard.routes.ts` — EJS + HTMX, login, daftar test case,
+  tombol Run dengan spinner, live frame/status/step, video dan trace final.
+- Verifikasi: handshake invalid → 4001; event run-a tidak bocor ke subscriber
+  run-b; frame Chromium nyata diterima; build OK; `npm test` 8/8.
+
+### Integrasi Fase 1 + Trace Parser (Step 14–15)
+- `scripts/e2e-phase1.ts` — acceptance repeatable melalui dashboard: live frame,
+  status passed, video player, trace link, empat artifact dapat diunduh dan
+  isinya valid (WebM, ZIP, console event, network response).
+- `src/analyzer/types.ts` — `TraceSummary` dan `TraceActionSummary`.
+- `src/analyzer/trace-parser.ts` — parser ZIP streaming bounded tanpa extract
+  resources/snapshot ke filesystem.
+- Test parser memakai trace Playwright nyata, termasuk action gagal/error.
+- Verifikasi akhir: build OK, `npm test` 10/10, E2E Fase 1 bersih.
+
+### Provider Adapters + Prompt Builder (Step 16–17)
+- `provider.interface.ts` dan `llm-client.interface.ts` menjadi kontrak tunggal
+  Analyzer/LLM lintas fase.
+- Lima adapter ada di `src/analyzer/providers/`; request vendor diuji dengan
+  fetch mock tanpa memakai API key/call berbayar.
+- `ProviderError` membawa provider, status HTTP, dan retryable.
+- `buildAnalyzerInput(testRunId)` membaca expected + artifact, membuat ringkasan
+  bounded, parse trace, dan screenshot Buffer opsional.
+- Verifikasi: build OK, `npm test` 18/18; E2E artifact nyata menghasilkan
+  AnalyzerInput dengan warning console, status network 503, expected, dan trace.
+
 ### Test Case Compiler (Step 8)
 - `src/runner/types.ts` — `Step` (union goto/fill/click/check/select/waitFor), `StepExecutionResult` (index/action/status/errorMessage/durationMs)
-- `src/runner/testcase-compiler.ts` — `executeSteps(page, steps)`: jalankan berurutan, fail-fast, tidak throw
+- `src/runner/testcase-compiler.ts` — `executeSteps(page, steps, onStepComplete?)`:
+  jalankan berurutan, fail-fast, error Playwright menjadi result failed
 - `playwright.config.ts` (root, baru dibuat) — `testDir: ./src`, `testMatch **/__tests__/**/*.spec.ts`, `actionTimeout: 3000`
 - `src/runner/__tests__/fixtures/sample.html` + `testcase-compiler.spec.ts` — 3 test: semua action sukses, fail-fast selector tidak ada, waitFor timeout
 - `package.json` script `test` → `playwright test`; `.gitignore` tambah `test-results/`, `playwright-report/`
 
 ### In-Memory Job Queue (Step 7)
 - `src/queue/types.ts` — `TestRunJob`, `AnalysisJob`, union `QueueJob`
-- `src/queue/queue.ts` — `testRunQueue`/`analysisQueue` (`p-queue@6`), `enqueueTestRun`/`enqueueAnalysis` (fire-and-forget), handler placeholder console.log, `getQueueStats()` (running/waiting per queue), `recoverStaleRunningTestRuns()`
+- `src/queue/queue.ts` — `testRunQueue`/`analysisQueue` (`p-queue@6`),
+  `enqueueTestRun`/`enqueueAnalysis` (fire-and-forget), testRun handler aktif,
+  analysis handler masih placeholder, `getQueueStats()`, recovery stale run
 - `src/config/env.ts` — tambah `TEST_RUN_QUEUE_CONCURRENCY` (default 2), `ANALYSIS_QUEUE_CONCURRENCY` (default 3)
 - `server.ts` — panggil `recoverStaleRunningTestRuns()` sebelum `app.listen`
 - `testcase.routes.ts` — `POST /test-cases/:id/run` diimplementasikan penuh (bukan 501 lagi): insert test_run + enqueue, balikan 202
@@ -189,13 +295,9 @@ Dokumen ini menyimpan **konteks percakapan lintas sesi**. Dibaca di awal setiap 
 
 ## Belum dikerjakan / catatan terbuka
 
-- File placeholder di folder kosong (routes, ws, analyzer, `schema.sql`) belum dibuat — sengaja, menunggu step masing-masing.
-- Video/trace hasil `executeTestRun` masih di temp dir OS, belum dipindah ke `./storage/artifacts/<run_id>/` dan belum ada row `artifact` di DB — itu scope Step 10 (`reporter.ts`/`collectArtifacts`) dan Step 11 (`artifact-storage.ts`).
-- Console log & network log browser (Step 10) belum ditangkap sama sekali di executor — listener `page.on('console'/'request'/'response')` belum dipasang.
 - `handleAnalysisJob` (analysis queue) masih placeholder console.log — analyzer sungguhan Step 19.
 - `.env` lokal sudah dibuat, tetapi nilai `DB_PASS`/`AUTH_SECRET` tetap harus diganti user sesuai environment nyata.
 - Role/user PostgreSQL sistem (`andyresta`) belum dibuat — akses peer auth ke cluster sistem belum tersedia tanpa sudo.
-- Belum ada validasi Zod untuk body request di routes (baru validasi manual dasar) — validasi Zod penuh untuk test case direncanakan di Step 6.
 - `analysis_result` repository belum ada (Fase 2), jadi `GET /test-runs/:id` selalu balikan `analysisResult: null` untuk saat ini.
 - `.env` lokal berisi contoh password (`admin123`, hash bcrypt) dan contoh nama model per provider (`claude-sonnet-4-5`, `gpt-5`, dst.) — hanya untuk dev lokal, WAJIB diganti user sesuai kredensial & model yang benar-benar tersedia di akunnya sebelum dipakai nyata.
 - Validasi Zod body test case sudah ada (Step 6); validasi Zod untuk resource lain (project, auth) masih manual dasar.
@@ -204,6 +306,47 @@ Dokumen ini menyimpan **konteks percakapan lintas sesi**. Dibaca di awal setiap 
 ---
 
 ## Log sesi (append-only, terbaru di atas)
+
+### 2026-08-16 — Provider Adapters + Prompt Builder (Step 16–17)
+- Keputusan: DeepSeek text-only; Kimi vision aktif berdasarkan docs resmi;
+  OpenCode Zen memakai routing protokol per keluarga model dan text-only
+  konservatif pada level provider.
+- Dikerjakan: interface LLM/analyzer, ProviderError, lima adapter,
+  STATUS_DEFINITIONS, filter/dedup/sanitasi log, trace+screenshot assembly.
+- Verifikasi: 18 test lulus dengan mock semua protokol dan rate-limit; E2E
+  membuktikan `buildAnalyzerInput` dari artifact run nyata. Tidak ada API key
+  dicetak atau provider berbayar yang dipanggil.
+
+### 2026-08-16 — E2E Fase 1 + Trace Parser (Step 14–15)
+- Review: kolom repository selaras migration; event WS selaras kontrak 4.3;
+  `process.env` hanya ada di `src/config/env.ts`. Audit menemukan blocker
+  `base_url`, late-subscribe WS, recovery `queued`, dan unduhan log UI —
+  semua sudah diperbaiki sebelum penutupan step.
+- Dikerjakan: script E2E repeatable, `TraceSummary`, parser `yauzl` streaming,
+  test trace nyata sukses+gagal, export `buildServer`, serta hardening
+  executor/dashboard/queue dari temuan audit.
+- Verifikasi: skenario `goto /login` relatif + live frame + status passed +
+  video/trace/console/network dapat diunduh; trace summary 5 action; build OK
+  dan `npm test` 10/10. Data/file E2E dibersihkan otomatis.
+
+### 2026-08-15 — Screencast Live View + Dashboard (Step 12–13)
+- Dikerjakan: WS gateway terautentikasi dan terisolasi per runId, event contract,
+  CDP screencast, broadcast status/step, dashboard EJS+HTMX dan asset UI.
+- Keputusan: pakai CDP fallback karena Playwright terpasang belum punya API
+  publik `page.screencast`; cookie JWT HttpOnly untuk navigasi/media dan
+  sessionStorage untuk Bearer fetch serta query WS.
+- Verifikasi: build OK; `npm test` 8/8; invalid JWT close 4001; isolasi runId
+  lolos; frame JPEG Chromium nyata diterima melalui gateway.
+
+### 2026-08-15 — Reporter + Artifact Storage (Step 10–11)
+- Dikerjakan: listener console/network di executor, JSON log, reporter,
+  filesystem storage layer, metadata artifact DB, endpoint stream/download.
+- Keputusan: network timing dipasangkan berdasarkan object Request (lebih aman
+  daripada URL saja untuk request paralel ke URL sama); request gagal status 0.
+- Verifikasi: build OK; `npm test` 6/6; E2E DB terisolasi menghasilkan status
+  passed, empat artifact (`video/trace/console_log/network_log`) dengan path
+  final valid; console/network JSON terstruktur; keempat endpoint download 200
+  dengan Content-Type dan body non-kosong. DB dan file verifikasi dibersihkan.
 
 ### 2026-08-15 — README.md proyek
 - Dikerjakan: `README.md` root — deskripsi alat automate testing web + AI,

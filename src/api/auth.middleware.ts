@@ -4,6 +4,7 @@ import { config } from '../config/env';
 import { ApiError } from './errors';
 
 const TOKEN_EXPIRY = '7d';
+export const AUTH_COOKIE_NAME = 'auth_token';
 
 export interface AuthTokenPayload {
   username: string;
@@ -16,6 +17,7 @@ export interface AuthTokenPayload {
 const PUBLIC_ROUTES: ReadonlyArray<{ method: string; path: string }> = [
   { method: 'GET', path: '/health' },
   { method: 'POST', path: '/auth/login' },
+  { method: 'GET', path: '/dashboard/login' },
 ];
 
 /**
@@ -24,9 +26,45 @@ const PUBLIC_ROUTES: ReadonlyArray<{ method: string; path: string }> = [
  */
 function isPublicRoute(request: FastifyRequest): boolean {
   const path = request.url.split('?')[0];
+  if (path?.startsWith('/assets/') || path?.startsWith('/vendor/')) {
+    return true;
+  }
   return PUBLIC_ROUTES.some(
     (route) => route.method === request.method && route.path === path,
   );
+}
+
+/**
+ * Keterangan: Memverifikasi JWT memakai secret yang sama untuk REST dan
+ * WebSocket, lalu mengembalikan payload username yang sudah tervalidasi.
+ */
+export function verifyAuthToken(token: string): AuthTokenPayload {
+  return jwt.verify(token, config.AUTH_SECRET) as AuthTokenPayload;
+}
+
+/**
+ * Keterangan: Mengambil token dari Authorization Bearer atau cookie dashboard.
+ * Bearer diprioritaskan agar perilaku REST API lama tetap tidak berubah.
+ */
+function extractRequestToken(request: FastifyRequest): string | null {
+  const header = request.headers.authorization;
+  if (header?.startsWith('Bearer ')) {
+    return header.slice('Bearer '.length).trim() || null;
+  }
+
+  const cookieHeader = request.headers.cookie;
+  if (!cookieHeader) {
+    return null;
+  }
+
+  for (const item of cookieHeader.split(';')) {
+    const [name, ...valueParts] = item.trim().split('=');
+    if (name === AUTH_COOKIE_NAME) {
+      return decodeURIComponent(valueParts.join('='));
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -59,18 +97,16 @@ export async function authMiddleware(
     return;
   }
 
-  const header = request.headers.authorization;
-  if (!header || !header.startsWith('Bearer ')) {
-    throw new ApiError(401, 'Header "Authorization: Bearer <token>" wajib diisi');
-  }
-
-  const token = header.slice('Bearer '.length).trim();
+  const token = extractRequestToken(request);
   if (!token) {
-    throw new ApiError(401, 'Token JWT tidak boleh kosong');
+    throw new ApiError(
+      401,
+      'Token JWT wajib diisi melalui Authorization Bearer atau cookie autentikasi',
+    );
   }
 
   try {
-    request.authUser = jwt.verify(token, config.AUTH_SECRET) as AuthTokenPayload;
+    request.authUser = verifyAuthToken(token);
   } catch {
     throw new ApiError(401, 'Token JWT tidak valid atau sudah kedaluwarsa');
   }

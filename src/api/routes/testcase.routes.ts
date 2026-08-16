@@ -4,6 +4,7 @@ import { testCaseRepository } from '../../db/repositories/test-case.repository';
 import { testRunRepository } from '../../db/repositories/test-run.repository';
 import type { JsonValue } from '../../db/repositories/types';
 import { enqueueTestRun } from '../../queue/queue';
+import { broadcastToRun } from '../../ws/gateway';
 import { ApiError } from '../errors';
 import {
   createTestCaseBodySchema,
@@ -85,6 +86,11 @@ export async function testCaseRoutes(app: FastifyInstance): Promise<void> {
     // Fire-and-forget: job dipush ke queue, response API tidak menunggu
     // eksekusi selesai. Eksekusi Playwright sungguhan diisi di Step 9.
     enqueueTestRun(testRun.id);
+    broadcastToRun(testRun.id, {
+      type: 'run:status',
+      runId: testRun.id,
+      status: 'queued',
+    });
 
     reply.status(202);
     return { runId: testRun.id, status: testRun.status };
