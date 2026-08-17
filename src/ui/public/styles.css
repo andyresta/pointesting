@@ -151,7 +151,8 @@ p {
 }
 
 .count,
-.status-badge {
+.status-badge,
+.analysis-badge {
   border-radius: 999px;
   padding: 0.28rem 0.65rem;
   white-space: nowrap;
@@ -176,6 +177,18 @@ p {
 
 .test-case:last-child {
   border-bottom: 0;
+}
+
+.latest-analysis-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+  font-size: 0.8rem;
+}
+
+.latest-analysis-label {
+  color: #475467;
 }
 
 .run-panel {
@@ -213,12 +226,88 @@ p {
   background: #fee4e2;
 }
 
+.analysis-status-success {
+  color: #05603a;
+  background: #d1fadf;
+}
+
+.analysis-status-fail {
+  color: #912018;
+  background: #fee4e2;
+}
+
+.analysis-status-bug {
+  color: #b54708;
+  background: #ffead5;
+}
+
+.analysis-status-anomaly {
+  color: #854a0e;
+  background: #fef0c7;
+}
+
+.evidence-layout {
+  display: grid;
+}
+
 .run-content {
   display: grid;
   min-height: 270px;
   place-items: center;
   padding: 1rem;
   background: #0c111d;
+}
+
+.analysis-panel {
+  padding: 1rem;
+  border-top: 1px solid #344054;
+  color: #18202a;
+  background: #fff;
+}
+
+.analysis-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.35rem;
+}
+
+.analysis-provider {
+  margin-bottom: 1rem;
+  color: #667085;
+  font-size: 0.82rem;
+}
+
+.analysis-field + .analysis-field {
+  margin-top: 0.9rem;
+}
+
+.analysis-field strong {
+  display: block;
+  margin-bottom: 0.25rem;
+  font-size: 0.82rem;
+}
+
+.analysis-field p {
+  margin-bottom: 0;
+  color: #344054;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.analysis-loading {
+  display: flex;
+  min-height: 110px;
+  align-items: center;
+  justify-content: center;
+  gap: 0.7rem;
+  color: #475467;
+}
+
+.analysis-unavailable {
+  color: #475467;
+  background: #f9fafb;
 }
 
 .live-frame,

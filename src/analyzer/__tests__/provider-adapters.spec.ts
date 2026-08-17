@@ -71,6 +71,7 @@ class MockLLMClient implements LLMClient {
 interface CapturedRequest {
   url?: string;
   init?: RequestInit;
+  calls?: number;
 }
 
 /**
@@ -86,6 +87,7 @@ function createFetchMock(
     input: Parameters<typeof fetch>[0],
     init?: RequestInit,
   ) => {
+    capture.calls = (capture.calls ?? 0) + 1;
     capture.url = String(input);
     capture.init = init;
     return new Response(JSON.stringify(payload), {
@@ -241,10 +243,11 @@ test('OpenCode memilih endpoint resmi berdasarkan keluarga model', async () => {
 });
 
 test('rate limit dinormalisasi menjadi ProviderError retryable', async () => {
+  const capture: CapturedRequest = {};
   const client = new DeepSeekLLMClient({
     apiKey: 'key-placeholder',
     model: 'deepseek-test',
-    fetchImpl: createFetchMock({ error: 'rate limit' }, {}, 429),
+    fetchImpl: createFetchMock({ error: 'rate limit' }, capture, 429),
   });
 
   const error = await client.complete('system', ['user']).catch((caught) => caught);
@@ -254,4 +257,5 @@ test('rate limit dinormalisasi menjadi ProviderError retryable', async () => {
     statusCode: 429,
     retryable: true,
   });
+  expect(capture.calls).toBe(2);
 });

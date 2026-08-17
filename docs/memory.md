@@ -29,7 +29,7 @@ Dokumen ini menyimpan **konteks percakapan lintas sesi**. Dibaca di awal setiap 
 | Stack | Node.js + TypeScript (strict), Fastify, `ws`, `pg`, `dotenv`, `zod`, `@playwright/test`, EJS + HTMX, `yauzl` |
 | Package manager | npm |
 | Fase roadmap | Fase 2 (AI Analyzer) |
-| Progress scaffolding | Step 1–17 selesai; Fase 1 sudah lulus E2E |
+| Progress scaffolding | Step 1–20 selesai; Fase 1 sudah lulus E2E |
 
 ---
 
@@ -157,6 +157,27 @@ Dokumen ini menyimpan **konteks percakapan lintas sesi**. Dibaca di awal setiap 
 - Prompt builder hanya memasukkan console error/warning dan network status
   0/>=400 atau response >3000ms; duplikat dihitung, query/hash URL dihapus,
   item/text dibatasi, trace diparse, screenshot opsional maksimal dua.
+- Analyzer service mencoba `project.default_provider` lebih dulu, lalu provider
+  lain yang API key-nya tersedia dalam urutan deterministik. Hanya
+  `ProviderError` yang memicu fallback; error internal diteruskan agar tidak
+  tertutup sebagai kegagalan vendor.
+- Adapter melakukan maksimal dua attempt (satu retry backoff) untuk network,
+  HTTP 429, dan 5xx sebelum analyzer service berpindah provider.
+- `analysis_result.raw_response` menyimpan output asli model sebagai JSONB
+  (atau hasil normalized untuk provider mock/custom), sedangkan event WS hanya
+  mengirim hasil normalized + provider agar payload tetap ringkas.
+- Executor enqueue analysis hanya setelah artifact dan status terminal
+  (`passed`/`failed`/`error`) berhasil dipersist. Queue handler menangkap error
+  analysis sehingga kegagalan AI tidak menjatuhkan proses/job lain.
+- Dashboard tidak menutup WS saat status test terminal; subscription + polling
+  dipertahankan sampai `run:analysis` tampil atau batas 30 polling/±60 detik.
+  Ini mencegah event analysis hilang setelah artifact selesai lebih dulu.
+- Kesimpulan AI hanya dirender setelah video atau trace siap pada run panel yang
+  sama. Event analysis yang datang lebih cepat disimpan sementara; jika bukti
+  gagal dimuat, kesimpulan disembunyikan.
+- List test case memperoleh `latestAnalysisResult` lewat satu `LEFT JOIN
+  LATERAL` per project (bukan N+1), tanpa `raw_response`; badge latest diperbarui
+  realtime dan juga muncul pada initial render dashboard.
 
 ---
 
@@ -205,7 +226,8 @@ Dokumen ini menyimpan **konteks percakapan lintas sesi**. Dibaca di awal setiap 
 - `src/api/error-handler.ts` — global error handler + not-found handler, format `{ error, statusCode }`
 - `src/api/routes/project.routes.ts` — `POST /projects`, `GET /projects/:id` (full, pakai repository)
 - `src/api/routes/testcase.routes.ts` — `POST/GET /projects/:id/test-cases`, `PATCH /test-cases/:id` (full); `POST /test-cases/:id/run` (501, tunggu Step 7/9); `GET /test-cases/:id/runs` (full)
-- `src/api/routes/testrun.routes.ts` — `GET /test-runs/:id` (full, + artifacts; `analysisResult` masih `null` karena repository Fase 2 belum ada); `GET /test-runs/:id/artifacts/:artifactId` (validasi run+artifact ada, lalu 501, tunggu Step 11)
+- `src/api/routes/testrun.routes.ts` — `GET /test-runs/:id` awalnya artifact +
+  analysis null; sejak Step 18 sudah mengembalikan analysis terbaru.
 - `src/api/routes/auth.routes.ts` — `POST /auth/login` (501, tunggu Step 5)
 - Semua route didaftarkan di `server.ts` bareng error handler
 - Sudah diuji end-to-end (sukses, 400, 404, 501, 404-not-found-handler) terhadap database `pointesting`
@@ -274,6 +296,27 @@ Dokumen ini menyimpan **konteks percakapan lintas sesi**. Dibaca di awal setiap 
 - Verifikasi: build OK, `npm test` 18/18; E2E artifact nyata menghasilkan
   AnalyzerInput dengan warning console, status network 503, expected, dan trace.
 
+### Analyzer Service + Queue Integration (Step 18–19)
+- `analysis-result.repository.ts` menyediakan CRUD/filter dan lookup hasil
+  terbaru per run; route detail run tidak lagi selalu mengembalikan null.
+- `analyzer.service.ts` mengorkestrasi lookup run→test case→project, prompt,
+  fallback, persistensi provider/raw response, dan broadcast `run:analysis`.
+- Executor otomatis memanggil `enqueueAnalysis`; import executor dari queue
+  dibuat dinamis untuk menghindari circular dependency CommonJS.
+- Verifikasi: 23 test lulus; E2E provider lokal membuktikan run terminal
+  otomatis dianalisis, tersimpan, dan terbaca kembali melalui API.
+
+### Dashboard Analysis Result (Step 20)
+- `GET /projects/:id/test-cases` dan render EJS memuat analysis terbaru per test
+  case; pemilihan latest memakai `created_at DESC, id DESC`.
+- Dashboard menangani `run:analysis`, resync REST, spinner menunggu AI, badge
+  empat warna, reason success, detail+solution untuk status lain.
+- Lifecycle panel dipisah antara artifact-ready dan analysis-ready; rerun test
+  case membangun ulang elemen live view agar tidak memakai DOM video lama.
+- Verifikasi: 27 test lulus (browser nyata untuk empat status); E2E realtime,
+  latest API dengan row lama pembanding, initial render setelah reload, dan
+  page-error collector semuanya lulus.
+
 ### Test Case Compiler (Step 8)
 - `src/runner/types.ts` — `Step` (union goto/fill/click/check/select/waitFor), `StepExecutionResult` (index/action/status/errorMessage/durationMs)
 - `src/runner/testcase-compiler.ts` — `executeSteps(page, steps, onStepComplete?)`:
@@ -286,7 +329,8 @@ Dokumen ini menyimpan **konteks percakapan lintas sesi**. Dibaca di awal setiap 
 - `src/queue/types.ts` — `TestRunJob`, `AnalysisJob`, union `QueueJob`
 - `src/queue/queue.ts` — `testRunQueue`/`analysisQueue` (`p-queue@6`),
   `enqueueTestRun`/`enqueueAnalysis` (fire-and-forget), testRun handler aktif,
-  analysis handler masih placeholder, `getQueueStats()`, recovery stale run
+  analysis handler awalnya placeholder dan aktif sejak Step 19,
+  `getQueueStats()`, recovery stale run
 - `src/config/env.ts` — tambah `TEST_RUN_QUEUE_CONCURRENCY` (default 2), `ANALYSIS_QUEUE_CONCURRENCY` (default 3)
 - `server.ts` — panggil `recoverStaleRunningTestRuns()` sebelum `app.listen`
 - `testcase.routes.ts` — `POST /test-cases/:id/run` diimplementasikan penuh (bukan 501 lagi): insert test_run + enqueue, balikan 202
@@ -295,10 +339,8 @@ Dokumen ini menyimpan **konteks percakapan lintas sesi**. Dibaca di awal setiap 
 
 ## Belum dikerjakan / catatan terbuka
 
-- `handleAnalysisJob` (analysis queue) masih placeholder console.log — analyzer sungguhan Step 19.
 - `.env` lokal sudah dibuat, tetapi nilai `DB_PASS`/`AUTH_SECRET` tetap harus diganti user sesuai environment nyata.
 - Role/user PostgreSQL sistem (`andyresta`) belum dibuat — akses peer auth ke cluster sistem belum tersedia tanpa sudo.
-- `analysis_result` repository belum ada (Fase 2), jadi `GET /test-runs/:id` selalu balikan `analysisResult: null` untuk saat ini.
 - `.env` lokal berisi contoh password (`admin123`, hash bcrypt) dan contoh nama model per provider (`claude-sonnet-4-5`, `gpt-5`, dst.) — hanya untuk dev lokal, WAJIB diganti user sesuai kredensial & model yang benar-benar tersedia di akunnya sebelum dipakai nyata.
 - Validasi Zod body test case sudah ada (Step 6); validasi Zod untuk resource lain (project, auth) masih manual dasar.
 - Belum ada endpoint HTTP untuk expose `getQueueStats()` — fungsinya sudah ada di `queue.ts`, tapi belum diminta jadi route API.
@@ -306,6 +348,25 @@ Dokumen ini menyimpan **konteks percakapan lintas sesi**. Dibaca di awal setiap 
 ---
 
 ## Log sesi (append-only, terbaru di atas)
+
+### 2026-08-17 — Dashboard Analysis Result (Step 20)
+- Keputusan: hasil AI tidak boleh tampil sebelum video/trace siap; event analysis
+  cepat ditahan, sedangkan event terlewat dipulihkan lewat polling bounded.
+- Dikerjakan: latest-analysis query tanpa N+1, response API/list badge, panel
+  realtime, empat warna status, reason/detail/solution, spinner, dan rerun-safe
+  DOM lifecycle.
+- Verifikasi: build OK, 27/27 test; E2E realtime + reload + latest row ordering
+  lulus dan tidak menemukan page error. Provider tetap mock lokal.
+
+### 2026-08-17 — Analyzer Service + Queue Integration (Step 18–19)
+- Keputusan: fallback hanya untuk `ProviderError`; default provider tetap dicoba
+  dulu walau key kosong agar kegagalan config tercatat, provider fallback hanya
+  yang memiliki API key.
+- Dikerjakan: repository analysis_result, retry adapter, orchestration fallback,
+  raw response JSONB, broadcast typed, auto-enqueue terminal, queue boundary,
+  dan response analysis terbaru pada detail run.
+- Verifikasi: build OK, 23/23 test; E2E executor→queue→provider deterministik
+  lokal→DB→API lulus tanpa mengirim API key atau melakukan call AI berbayar.
 
 ### 2026-08-16 — Provider Adapters + Prompt Builder (Step 16–17)
 - Keputusan: DeepSeek text-only; Kimi vision aktif berdasarkan docs resmi;

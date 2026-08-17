@@ -1,7 +1,7 @@
 import { rm } from 'node:fs/promises';
 import * as path from 'node:path';
 import Fastify, { type FastifyInstance } from 'fastify';
-import { chromium, type Browser } from '@playwright/test';
+import { chromium, type Browser, type Page } from '@playwright/test';
 import {
   AUTH_COOKIE_NAME,
   signAuthToken,
@@ -11,6 +11,11 @@ import { config } from '../src/config/env';
 import { pool } from '../src/db/client';
 import { parseTrace } from '../src/analyzer/trace-parser';
 import { buildAnalyzerInput } from '../src/analyzer/prompt-builder';
+import {
+  analyzerProviders,
+} from '../src/analyzer/analyzer.service';
+import type { AnalyzerProvider } from '../src/analyzer/provider.interface';
+import { analysisQueue, testRunQueue } from '../src/queue/queue';
 
 interface CreatedResource {
   id: string;
@@ -30,6 +35,19 @@ interface ArtifactResponse {
 interface RunDetailResponse {
   status: string;
   artifacts: ArtifactResponse[];
+  analysisResult: {
+    status: string;
+    provider: string;
+    reason: string | null;
+  } | null;
+}
+
+interface TestCaseListResponse {
+  id: string;
+  latestAnalysisResult: {
+    status: string;
+    provider: string;
+  } | null;
 }
 
 interface ConsoleLogEntry {
@@ -122,12 +140,49 @@ async function callApi(
 }
 
 /**
- * Keterangan: Menjalankan acceptance E2E Fase 1 dari dashboard sampai live
- * frame dan empat artifact, lalu memvalidasi trace dengan parser Step 15.
+ * Keterangan: Mengumpulkan exception JavaScript halaman dashboard agar error
+ * runtime yang tidak terlihat oleh assertion UI tetap menggagalkan E2E.
+ */
+function collectPageErrors(page: Page, errors: string[]): void {
+  page.on('pageerror', (error) => {
+    errors.push(error.message);
+  });
+}
+
+/**
+ * Keterangan: Membuat provider deterministik untuk acceptance E2E agar alur
+ * queue/analyzer/persistensi teruji tanpa memakai API key atau biaya vendor.
+ */
+function createE2eAnalyzerProvider(): AnalyzerProvider {
+  return {
+    name: 'claude',
+    supportsImage: true,
+    analyze: async (input) => {
+      if (
+        input.expected[0] !== 'Elemen #success muncul' ||
+        !input.consoleLogSummary.includes('e2e-warning') ||
+        !input.networkLogSummary.includes('status 503') ||
+        input.traceSummary.totalActions < 5
+      ) {
+        throw new Error('Input analyzer otomatis tidak lengkap');
+      }
+      return {
+        status: 'success',
+        reason: 'Expected result dan bukti artifact sesuai.',
+      };
+    },
+  };
+}
+
+/**
+ * Keterangan: Menjalankan acceptance E2E dari dashboard sampai live frame,
+ * empat artifact, lalu auto-analysis queue dan persistensi hasil Step 18–19.
  */
 async function runPhaseOneE2e(): Promise<void> {
   const app = buildServer();
   const target = await createTargetServer();
+  const originalClaudeProvider = analyzerProviders.claude;
+  analyzerProviders.claude = createE2eAnalyzerProvider();
   let browser: Browser | undefined;
   let projectId: string | undefined;
   let runId: string | undefined;
@@ -186,6 +241,8 @@ async function runPhaseOneE2e(): Promise<void> {
     );
 
     const page = await context.newPage();
+    const pageErrors: string[] = [];
+    collectPageErrors(page, pageErrors);
     await page.goto(`${appUrl}/dashboard`);
     const runButton = page.locator(
       `.run-button[data-test-case-id="${testCase.id}"]`,
@@ -214,6 +271,19 @@ async function runPhaseOneE2e(): Promise<void> {
     await page
       .getByRole('link', { name: 'Download network log' })
       .waitFor({ timeout: 10_000 });
+    const activeTestCase = page.locator(
+      `.test-case[data-test-case-id="${testCase.id}"]`,
+    );
+    await activeTestCase
+      .locator('.analysis-panel .analysis-status-success')
+      .waitFor({ timeout: 15_000 });
+    await activeTestCase
+      .locator('.analysis-panel')
+      .getByText('Expected result dan bukti artifact sesuai.')
+      .waitFor();
+    await activeTestCase
+      .locator('.latest-analysis-summary .analysis-status-success')
+      .waitFor();
 
     const detail = await readSuccessfulJson<RunDetailResponse>(
       await callApi(appUrl, token, `/test-runs/${run.runId}`),
@@ -285,6 +355,43 @@ async function runPhaseOneE2e(): Promise<void> {
     ) {
       throw new Error('AnalyzerInput tidak memuat ringkasan artifact yang tepat');
     }
+    await testRunQueue.onIdle();
+    await analysisQueue.onIdle();
+    const analyzedDetail = await readSuccessfulJson<RunDetailResponse>(
+      await callApi(appUrl, token, `/test-runs/${run.runId}`),
+    );
+    if (
+      analyzedDetail.analysisResult?.status !== 'success' ||
+      analyzedDetail.analysisResult.provider !== 'claude'
+    ) {
+      throw new Error('Analysis queue tidak menyimpan hasil provider otomatis');
+    }
+    await pool.query(
+      `INSERT INTO analysis_result
+         (test_run_id, status, detail, solution, provider, raw_response, created_at)
+       VALUES ($1, 'bug', 'hasil lama', 'abaikan hasil lama', 'openai', $2, now() - interval '1 day')`,
+      [run.runId, JSON.stringify({ source: 'older-e2e-result' })],
+    );
+    const listedTestCases = await readSuccessfulJson<TestCaseListResponse[]>(
+      await callApi(appUrl, token, `/projects/${project.id}/test-cases`),
+    );
+    const listedTestCase = listedTestCases.find((item) => item.id === testCase.id);
+    if (
+      listedTestCase?.latestAnalysisResult?.status !== 'success' ||
+      listedTestCase.latestAnalysisResult.provider !== 'claude'
+    ) {
+      throw new Error('List test case tidak memuat analysis terbaru');
+    }
+
+    await page.reload();
+    await page
+      .locator(
+        `.test-case[data-test-case-id="${testCase.id}"] .latest-analysis-summary .analysis-status-success`,
+      )
+      .waitFor();
+    if (pageErrors.length > 0) {
+      throw new Error(`Dashboard memiliki error runtime: ${pageErrors.join('; ')}`);
+    }
 
     console.log(
       JSON.stringify({
@@ -294,11 +401,20 @@ async function runPhaseOneE2e(): Promise<void> {
         artifactTypes: requiredTypes,
         traceActions: traceSummary.totalActions,
         analyzerInput: true,
+        analysisQueued: true,
+        analysisProvider: analyzedDetail.analysisResult.provider,
+        dashboardAnalysis: true,
+        latestAnalysisApi: true,
       }),
     );
 
     await context.close();
   } finally {
+    await Promise.all([
+      testRunQueue.onIdle().catch(() => undefined),
+      analysisQueue.onIdle().catch(() => undefined),
+    ]);
+    analyzerProviders.claude = originalClaudeProvider;
     if (browser) {
       await browser.close().catch(() => undefined);
     }

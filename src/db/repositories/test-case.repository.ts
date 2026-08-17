@@ -1,10 +1,13 @@
 import { pool } from '../client';
 import { buildUpdateQuery } from './query-utils';
 import type {
+  AnalysisStatus,
   TestCase,
   TestCaseCreateData,
   TestCaseUpdateData,
+  TestCaseWithLatestAnalysis,
 } from './types';
+import type { ProviderName } from '../../config/env';
 
 const TEST_CASE_COLUMNS = `
   id,
@@ -16,6 +19,57 @@ const TEST_CASE_COLUMNS = `
   created_at AS "createdAt",
   updated_at AS "updatedAt"
 `;
+
+interface TestCaseLatestAnalysisRow extends TestCase {
+  analysisId: string | null;
+  analysisTestRunId: string | null;
+  analysisStatus: AnalysisStatus | null;
+  analysisReason: string | null;
+  analysisDetail: string | null;
+  analysisSolution: string | null;
+  analysisProvider: ProviderName | null;
+  analysisCreatedAt: Date | null;
+}
+
+/**
+ * Keterangan: Mengubah row LEFT JOIN latest analysis menjadi response test
+ * case dengan object latestAnalysisResult yang null-safe.
+ */
+function mapLatestAnalysisRow(
+  row: TestCaseLatestAnalysisRow,
+): TestCaseWithLatestAnalysis {
+  const {
+    analysisId,
+    analysisTestRunId,
+    analysisStatus,
+    analysisReason,
+    analysisDetail,
+    analysisSolution,
+    analysisProvider,
+    analysisCreatedAt,
+    ...testCase
+  } = row;
+
+  return {
+    ...testCase,
+    latestAnalysisResult:
+      analysisId &&
+      analysisTestRunId &&
+      analysisStatus &&
+      analysisProvider
+        ? {
+            id: analysisId,
+            testRunId: analysisTestRunId,
+            status: analysisStatus,
+            reason: analysisReason,
+            detail: analysisDetail,
+            solution: analysisSolution,
+            provider: analysisProvider,
+            createdAt: analysisCreatedAt,
+          }
+        : null,
+  };
+}
 
 export interface TestCaseFilter {
   projectId?: string;
@@ -79,6 +133,45 @@ export class TestCaseRepository {
     );
 
     return result.rows;
+  }
+
+  /**
+   * Keterangan: Mengambil seluruh test case satu project beserta satu hasil
+   * analysis terbaru lintas run menggunakan LEFT JOIN LATERAL tanpa N+1 query.
+   */
+  async findAllWithLatestAnalysis(
+    projectId: string,
+  ): Promise<TestCaseWithLatestAnalysis[]> {
+    const result = await pool.query<TestCaseLatestAnalysisRow>(
+      `SELECT
+         test_case_row.*,
+         latest_analysis.id AS "analysisId",
+         latest_analysis.test_run_id AS "analysisTestRunId",
+         latest_analysis.status AS "analysisStatus",
+         latest_analysis.reason AS "analysisReason",
+         latest_analysis.detail AS "analysisDetail",
+         latest_analysis.solution AS "analysisSolution",
+         latest_analysis.provider AS "analysisProvider",
+         latest_analysis.created_at AS "analysisCreatedAt"
+       FROM (
+         SELECT ${TEST_CASE_COLUMNS}
+         FROM test_case
+         WHERE project_id = $1
+       ) AS test_case_row
+       LEFT JOIN LATERAL (
+         SELECT analysis_result.*
+         FROM test_run
+         JOIN analysis_result
+           ON analysis_result.test_run_id = test_run.id
+         WHERE test_run.test_case_id = test_case_row.id
+         ORDER BY analysis_result.created_at DESC, analysis_result.id DESC
+         LIMIT 1
+       ) AS latest_analysis ON TRUE
+       ORDER BY test_case_row."createdAt" DESC`,
+      [projectId],
+    );
+
+    return result.rows.map(mapLatestAnalysisRow);
   }
 
   /**

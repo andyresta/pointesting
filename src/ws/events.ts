@@ -2,6 +2,8 @@ import type {
   TestRunStatus,
   TestStepResultStatus,
 } from '../db/repositories/types';
+import type { ProviderName } from '../config/env';
+import type { AnalysisResult } from '../analyzer/provider.interface';
 
 export interface RunStatusEvent {
   type: 'run:status';
@@ -28,7 +30,7 @@ export interface RunStepEvent {
 export interface RunAnalysisEvent {
   type: 'run:analysis';
   runId: string;
-  analysisResult: unknown;
+  analysisResult: AnalysisResult & { provider: ProviderName };
 }
 
 export type RunServerEvent =

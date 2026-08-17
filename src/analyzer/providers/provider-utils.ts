@@ -15,6 +15,13 @@ import type {
 export type FetchImplementation = typeof fetch;
 
 const PROVIDER_TIMEOUT_MS = 30_000;
+const PROVIDER_MAX_ATTEMPTS = 2;
+const PROVIDER_RETRY_DELAY_MS = 250;
+const RAW_PROVIDER_RESPONSE = Symbol('rawProviderResponse');
+
+type AnalysisResultWithRawResponse = AnalysisResult & {
+  [RAW_PROVIDER_RESPONSE]?: string;
+};
 
 /**
  * Keterangan: Memastikan API key dan model tersedia saat provider benar-benar
@@ -34,8 +41,19 @@ export function assertProviderConfigured(
 }
 
 /**
+ * Keterangan: Memberi jeda backoff pendek sebelum satu retry provider agar
+ * rate-limit/transient server error tidak langsung membebani endpoint lagi.
+ */
+async function waitBeforeProviderRetry(attempt: number): Promise<void> {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, PROVIDER_RETRY_DELAY_MS * attempt);
+  });
+}
+
+/**
  * Keterangan: Melakukan POST JSON ke provider dengan timeout dan menormalkan
- * network/rate-limit/HTTP/JSON error menjadi ProviderError.
+ * network/rate-limit/HTTP/JSON error menjadi ProviderError. Network, HTTP 429,
+ * dan 5xx dicoba ulang satu kali dengan backoff sebelum fallback lintas vendor.
  */
 export async function postProviderJson<T>(
   provider: ProviderName,
@@ -44,39 +62,54 @@ export async function postProviderJson<T>(
   body: unknown,
   fetchImpl: FetchImplementation,
 ): Promise<T> {
-  let response: Response;
-  try {
-    response = await fetchImpl(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...headers,
-      },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
-    });
-  } catch (error) {
-    throw new ProviderError(provider, 'Request jaringan gagal', {
-      retryable: true,
-      cause: error,
-    });
+  for (let attempt = 1; attempt <= PROVIDER_MAX_ATTEMPTS; attempt += 1) {
+    let response: Response;
+    try {
+      response = await fetchImpl(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...headers,
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
+      });
+    } catch (error) {
+      if (attempt < PROVIDER_MAX_ATTEMPTS) {
+        await waitBeforeProviderRetry(attempt);
+        continue;
+      }
+      throw new ProviderError(provider, 'Request jaringan gagal', {
+        retryable: true,
+        cause: error,
+      });
+    }
+
+    const retryableStatus = response.status === 429 || response.status >= 500;
+    if (!response.ok) {
+      if (retryableStatus && attempt < PROVIDER_MAX_ATTEMPTS) {
+        await waitBeforeProviderRetry(attempt);
+        continue;
+      }
+      throw new ProviderError(
+        provider,
+        `Provider mengembalikan HTTP ${response.status}`,
+        { statusCode: response.status },
+      );
+    }
+
+    try {
+      return (await response.json()) as T;
+    } catch (error) {
+      throw new ProviderError(provider, 'Response bukan JSON valid', {
+        cause: error,
+      });
+    }
   }
 
-  if (!response.ok) {
-    throw new ProviderError(
-      provider,
-      `Provider mengembalikan HTTP ${response.status}`,
-      { statusCode: response.status },
-    );
-  }
-
-  try {
-    return (await response.json()) as T;
-  } catch (error) {
-    throw new ProviderError(provider, 'Response bukan JSON valid', {
-      cause: error,
-    });
-  }
+  throw new ProviderError(provider, 'Request gagal setelah retry', {
+    retryable: true,
+  });
 }
 
 /**
@@ -251,12 +284,27 @@ export function parseAnalysisResult(
     );
   }
 
-  return {
+  const result: AnalysisResultWithRawResponse = {
     status,
     ...(reason ? { reason } : {}),
     ...(detail ? { detail } : {}),
     ...(solution ? { solution } : {}),
   };
+  Object.defineProperty(result, RAW_PROVIDER_RESPONSE, {
+    value: rawResponse,
+    enumerable: false,
+  });
+  return result;
+}
+
+/**
+ * Keterangan: Mengambil teks asli keluaran model yang disimpan adapter secara
+ * non-enumerable; provider mock/custom akan memakai hasil ternormalisasi.
+ */
+export function getRawProviderResponse(
+  result: AnalysisResult,
+): string | AnalysisResult {
+  return (result as AnalysisResultWithRawResponse)[RAW_PROVIDER_RESPONSE] ?? result;
 }
 
 /**

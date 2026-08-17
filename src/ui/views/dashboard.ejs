@@ -52,6 +52,17 @@
                 <div>
                   <h3><%= testCase.title %></h3>
                   <p class="muted"><%= Array.isArray(testCase.steps) ? testCase.steps.length : 0 %> langkah</p>
+                  <div class="latest-analysis-summary" <%= testCase.latestAnalysisResult ? '' : 'hidden' %>>
+                    <% if (testCase.latestAnalysisResult) { %>
+                      <span
+                        class="analysis-badge analysis-status-<%= testCase.latestAnalysisResult.status %>"
+                        data-latest-analysis-badge
+                      ><%= testCase.latestAnalysisResult.status %></span>
+                      <span class="latest-analysis-label">
+                        Analisis terakhir · <%= testCase.latestAnalysisResult.provider %>
+                      </span>
+                    <% } %>
+                  </div>
                 </div>
                 <button class="run-button" type="button" data-test-case-id="<%= testCase.id %>">
                   <span class="button-label">Run</span>
@@ -64,9 +75,12 @@
                   <strong>Live run</strong>
                   <span class="status-badge status-queued">queued</span>
                 </div>
-                <div class="run-content">
-                  <div class="live-placeholder">Menunggu frame browser…</div>
-                  <img class="live-frame" alt="Live browser view" hidden />
+                <div class="evidence-layout">
+                  <div class="run-content">
+                    <div class="live-placeholder">Menunggu frame browser…</div>
+                    <img class="live-frame" alt="Live browser view" hidden />
+                  </div>
+                  <aside class="analysis-panel" aria-live="polite" hidden></aside>
                 </div>
                 <ol class="step-events"></ol>
               </section>

@@ -11,13 +11,13 @@ Referensi: `roadmap-ai-testing-tool.md`, `arsitektur-spesifikasi-teknis.md`, `ex
 | | |
 |---|---|
 | Fase saat ini | Fase 2 |
-| Step aktif | Step 18 |
+| Step aktif | Step 21 |
 | Progress Fase 1 | 15 / 15 step selesai |
-| Progress Fase 2 | 3 / 8 step selesai |
+| Progress Fase 2 | 6 / 8 step selesai |
 | Progress Fase 3 | 0 / 4 step selesai |
 | Progress Fase 4 | 0 / 3 step selesai |
 | Progress Fase 5 | 0 / 4 step selesai |
-| Terakhir diupdate | 2026-08-16 |
+| Terakhir diupdate | 2026-08-17 |
 
 ---
 
@@ -58,9 +58,9 @@ Referensi: `roadmap-ai-testing-tool.md`, `arsitektur-spesifikasi-teknis.md`, `ex
 | 15 | Trace Parser | Done | 2026-08-16 | 2026-08-16 | ZIP streaming; action/timing/error bounded ≤20 action tanpa snapshot/network mentah |
 | 16 | Provider Interface & Adapters (Multi-AI) | Done | 2026-08-16 | 2026-08-16 | LLMClient + AnalyzerProvider untuk Claude/OpenAI/DeepSeek/Kimi/OpenCode; ProviderError + output konsisten |
 | 17 | Prompt Builder | Done | 2026-08-16 | 2026-08-16 | Filter/dedup console+network, sanitasi URL, trace + screenshot opsional; E2E AnalyzerInput valid |
-| 18 | Analyzer Service (Provider Selection + Fallback) | Planning | | | |
-| 19 | Integrasi Analyzer ke Queue | Planning | | | |
-| 20 | Update Dashboard untuk Analysis Result | Planning | | | |
+| 18 | Analyzer Service (Provider Selection + Fallback) | Done | 2026-08-17 | 2026-08-17 | Default provider + fallback terkonfigurasi; hasil/provider/raw response tersimpan dan broadcast |
+| 19 | Integrasi Analyzer ke Queue | Done | 2026-08-17 | 2026-08-17 | Semua status terminal auto-enqueue; failure boundary mencegah error analysis menjatuhkan worker |
+| 20 | Update Dashboard untuk Analysis Result | Done | 2026-08-17 | 2026-08-17 | Realtime panel + resync, empat warna status, evidence-gated, latest badge/API tanpa N+1 |
 | 21 | Anomaly Detection Berbasis Histori | Planning | | | |
 | 22 | Testing & Validasi Akurasi Klasifikasi | Planning | | | |
 
@@ -95,6 +95,28 @@ Referensi: `roadmap-ai-testing-tool.md`, `arsitektur-spesifikasi-teknis.md`, `ex
 ## Changelog
 
 Format: `YYYY-MM-DD` — deskripsi perubahan (keputusan, scope, atau step yang selesai).
+
+### 2026-08-17
+- Step 20 selesai: dashboard menunggu `run:analysis` setelah status terminal,
+  menampilkan spinner analysis, lalu merender reason atau detail+solution di
+  panel yang sama dengan video/trace. Kesimpulan ditahan bila bukti belum siap;
+  polling REST menangani event WS terlewat dan berhenti terukur bila provider
+  gagal. Badge latest analysis diperbarui realtime dan tersedia pada render
+  awal/API list melalui satu query `LEFT JOIN LATERAL`.
+- Warna status tervalidasi: success hijau, fail merah, bug oranye, anomaly
+  kuning. Build lolos, 27 test lulus, serta E2E membuktikan realtime tanpa
+  reload, hasil latest yang benar saat ada row lama, render setelah reload,
+  dan tidak ada exception JavaScript dashboard.
+- Step 18–19 selesai: `analyzeTestRun` mengambil provider default project,
+  mencoba fallback berurutan hanya saat `ProviderError`, menyimpan
+  `analysis_result` beserta provider dan raw response JSONB, lalu broadcast
+  `run:analysis`. Adapter melakukan satu retry backoff untuk network/429/5xx.
+  Executor otomatis enqueue analysis setelah status terminal dan artifact
+  tersimpan; handler queue menangkap seluruh error agar worker tetap hidup.
+  `GET /test-runs/:id` kini mengembalikan analysis result terbaru.
+- Verifikasi: build lolos, 23 test lulus (fallback, semua provider gagal,
+  non-provider error, retry, queue isolation), dan E2E membuktikan alur
+  executor → analysisQueue → provider mock → DB → API tanpa call AI berbayar.
 
 ### 2026-08-16
 - Step 16–17 selesai: kontrak `LLMClient`, `AnalyzerProvider`,

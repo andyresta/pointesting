@@ -1,10 +1,13 @@
 import type { FastifyInstance } from 'fastify';
 import { projectRepository } from '../../db/repositories/project.repository';
 import { testCaseRepository } from '../../db/repositories/test-case.repository';
-import type { Project, TestCase } from '../../db/repositories/types';
+import type {
+  Project,
+  TestCaseWithLatestAnalysis,
+} from '../../db/repositories/types';
 
 interface DashboardProject extends Project {
-  testCases: TestCase[];
+  testCases: TestCaseWithLatestAnalysis[];
 }
 
 /**
@@ -16,7 +19,7 @@ async function getDashboardProjects(): Promise<DashboardProject[]> {
   return Promise.all(
     projects.map(async (project) => ({
       ...project,
-      testCases: await testCaseRepository.findAll({ projectId: project.id }),
+      testCases: await testCaseRepository.findAllWithLatestAnalysis(project.id),
     })),
   );
 }

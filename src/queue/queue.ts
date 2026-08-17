@@ -1,7 +1,7 @@
 import PQueue from 'p-queue';
+import { analyzeTestRun } from '../analyzer/analyzer.service';
 import { config } from '../config/env';
 import { testRunRepository } from '../db/repositories/test-run.repository';
-import { executeTestRun } from '../runner/executor';
 import type { AnalysisJob, TestRunJob } from './types';
 
 /**
@@ -25,23 +25,31 @@ export const analysisQueue = new PQueue({
 
 /**
  * Keterangan: Handler job test_run — memanggil executor Playwright
- * sungguhan (Step 9). `executeTestRun` sudah menangani seluruh error di
- * dalam dirinya sendiri (tidak pernah throw), jadi satu job gagal tidak
- * menghentikan worker queue.
+ * sungguhan lewat import dinamis untuk menghindari circular dependency saat
+ * executor mengantrekan analysis. Executor menangani error internal sendiri.
  */
 async function handleTestRunJob(job: TestRunJob): Promise<void> {
+  const { executeTestRun } = await import('../runner/executor.js');
   await executeTestRun(job.testRunId);
 }
 
 /**
- * Keterangan: Handler job analysis — untuk sekarang masih placeholder
- * (console.log saja). Pemanggilan AI provider untuk analisis hasil test run
- * sungguhan akan diisi di Step 19.
+ * Keterangan: Menjalankan analyzer sungguhan dengan failure boundary; error
+ * provider/persistensi dicatat tetapi tidak diteruskan agar worker dan job
+ * analysis lain tetap berjalan.
  */
-async function handleAnalysisJob(job: AnalysisJob): Promise<void> {
-  console.log(
-    `[analysisQueue] Placeholder — akan menganalisis test run "${job.testRunId}" (lihat Step 19)`,
-  );
+export async function handleAnalysisJob(
+  job: AnalysisJob,
+  analyze: (testRunId: string) => Promise<unknown> = analyzeTestRun,
+): Promise<void> {
+  try {
+    await analyze(job.testRunId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(
+      `[analysisQueue] Analisis test run "${job.testRunId}" gagal: ${message}`,
+    );
+  }
 }
 
 /**
@@ -56,7 +64,7 @@ export function enqueueTestRun(testRunId: string): void {
 
 /**
  * Keterangan: Push job AI analysis ke analysisQueue. Bersifat fire-and-forget,
- * biasanya dipanggil setelah satu test run selesai dieksekusi (Step 9/19).
+ * dipanggil executor setelah status terminal dan artifact selesai disimpan.
  */
 export function enqueueAnalysis(testRunId: string): void {
   const job: AnalysisJob = { type: 'analysis', testRunId };

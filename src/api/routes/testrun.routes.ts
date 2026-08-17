@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import * as path from 'node:path';
+import { analysisResultRepository } from '../../db/repositories/analysis-result.repository';
 import { artifactRepository } from '../../db/repositories/artifact.repository';
 import { testRunRepository } from '../../db/repositories/test-run.repository';
 import type { ArtifactType } from '../../db/repositories/types';
@@ -26,9 +27,8 @@ function getArtifactContentType(type: ArtifactType): string {
 
 /**
  * Keterangan: Mendaftarkan route resource test run sesuai spesifikasi API
- * bagian 5 — detail run beserta daftar artifact (analysis_result belum ada
- * repository-nya, baru dibuat di Fase 2), dan streaming/download artifact
- * dari filesystem melalui artifact-storage Step 11.
+ * bagian 5 — detail run beserta artifact dan hasil analisis terbaru, serta
+ * streaming/download artifact dari filesystem melalui artifact-storage.
  */
 export async function testRunRoutes(app: FastifyInstance): Promise<void> {
   app.get('/test-runs/:id', async (request) => {
@@ -39,13 +39,15 @@ export async function testRunRoutes(app: FastifyInstance): Promise<void> {
       throw new ApiError(404, `Test run dengan id "${id}" tidak ditemukan`);
     }
 
-    const artifacts = await artifactRepository.findAll({ testRunId: id });
+    const [artifacts, analysisResult] = await Promise.all([
+      artifactRepository.findAll({ testRunId: id }),
+      analysisResultRepository.findLatestByTestRunId(id),
+    ]);
 
     return {
       ...testRun,
       artifacts,
-      // analysis_result belum punya repository (Fase 2 / Step 16-19)
-      analysisResult: null,
+      analysisResult,
     };
   });
 

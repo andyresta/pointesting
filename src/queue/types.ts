@@ -9,7 +9,7 @@ export interface TestRunJob {
 
 /**
  * Keterangan: Job untuk menjalankan AI analysis atas satu test run — dipush
- * ke analysisQueue. Eksekusi sungguhan diisi di Step 19 (analyzer.service.ts).
+ * ke analysisQueue dan diproses oleh analyzer.service.ts.
  */
 export interface AnalysisJob {
   type: 'analysis';

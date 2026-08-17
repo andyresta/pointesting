@@ -14,6 +14,7 @@ import { testCaseRepository } from '../db/repositories/test-case.repository';
 import { testRunRepository } from '../db/repositories/test-run.repository';
 import { testStepResultRepository } from '../db/repositories/test-step-result.repository';
 import type { TestRunStatus } from '../db/repositories/types';
+import { enqueueAnalysis } from '../queue/queue';
 import { broadcastToRun } from '../ws/gateway';
 import { collectArtifacts } from './reporter';
 import {
@@ -352,6 +353,7 @@ async function runTestRun(testRunId: string): Promise<void> {
 
   const finishedAt = new Date();
   const statusToPersist = finalStatus ?? 'error';
+  let persistedFinalStatus: TestRunStatus | undefined;
   try {
     await testRunRepository.update(testRunId, {
       status: statusToPersist,
@@ -365,10 +367,12 @@ async function runTestRun(testRunId: string): Promise<void> {
       runId: testRunId,
       status: statusToPersist,
     });
+    persistedFinalStatus = statusToPersist;
   } catch (updateError) {
     console.error(`[executor] Gagal update status akhir test_run "${testRunId}":`, updateError);
     try {
       await markTestRunError(testRunId, startedAt);
+      persistedFinalStatus = 'error';
     } catch (markError) {
       console.error(
         `[executor] Gagal menandai error terminal test_run "${testRunId}":`,
@@ -377,8 +381,12 @@ async function runTestRun(testRunId: string): Promise<void> {
     }
   }
 
+  if (persistedFinalStatus) {
+    enqueueAnalysis(testRunId);
+  }
+
   console.log(
-    `[executor] test_run "${testRunId}" selesai dengan status "${statusToPersist}" (artifact di storage/artifacts/${testRunId})`,
+    `[executor] test_run "${testRunId}" selesai dengan status "${persistedFinalStatus ?? statusToPersist}" (artifact di storage/artifacts/${testRunId})`,
   );
 }
 

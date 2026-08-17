@@ -1,3 +1,5 @@
+import type { ProviderName } from '../../config/env';
+
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
 
@@ -104,6 +106,46 @@ export interface ArtifactUpdateData {
   type?: ArtifactType;
   filePath?: string;
   sizeBytes?: string | number | null;
+}
+
+export type AnalysisStatus = 'success' | 'fail' | 'bug' | 'anomaly';
+
+export interface AnalysisResultRecord {
+  id: string;
+  testRunId: string;
+  status: AnalysisStatus;
+  reason: string | null;
+  detail: string | null;
+  solution: string | null;
+  provider: ProviderName;
+  rawResponse: JsonValue | null;
+  createdAt: Date | null;
+}
+
+export interface AnalysisResultCreateData {
+  testRunId: string;
+  status: AnalysisStatus;
+  reason?: string | null;
+  detail?: string | null;
+  solution?: string | null;
+  provider: ProviderName;
+  rawResponse?: JsonValue | null;
+}
+
+export interface AnalysisResultUpdateData {
+  testRunId?: string;
+  status?: AnalysisStatus;
+  reason?: string | null;
+  detail?: string | null;
+  solution?: string | null;
+  provider?: ProviderName;
+  rawResponse?: JsonValue | null;
+}
+
+export type AnalysisResultSummary = Omit<AnalysisResultRecord, 'rawResponse'>;
+
+export interface TestCaseWithLatestAnalysis extends TestCase {
+  latestAnalysisResult: AnalysisResultSummary | null;
 }
 
 export type TestStepResultStatus = 'passed' | 'failed';

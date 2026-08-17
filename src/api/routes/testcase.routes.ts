@@ -15,9 +15,8 @@ import {
 /**
  * Keterangan: Mendaftarkan route resource test case sesuai spesifikasi API
  * bagian 5 — create/list/edit memakai Zod schema bagian 4.1, trigger run
- * (insert test_run + push ke in-memory queue, sesuai alur 6.1 — eksekusi
- * sungguhan di dalam queue worker masih placeholder sampai Step 9), dan
- * riwayat run per test case.
+ * (insert test_run + push ke in-memory queue), list dengan hasil analysis
+ * terbaru, dan riwayat run per test case.
  */
 export async function testCaseRoutes(app: FastifyInstance): Promise<void> {
   app.post('/projects/:id/test-cases', async (request, reply) => {
@@ -49,7 +48,7 @@ export async function testCaseRoutes(app: FastifyInstance): Promise<void> {
       throw new ApiError(404, `Project dengan id "${projectId}" tidak ditemukan`);
     }
 
-    return testCaseRepository.findAll({ projectId });
+    return testCaseRepository.findAllWithLatestAnalysis(projectId);
   });
 
   app.patch('/test-cases/:id', async (request) => {
@@ -84,7 +83,7 @@ export async function testCaseRoutes(app: FastifyInstance): Promise<void> {
     });
 
     // Fire-and-forget: job dipush ke queue, response API tidak menunggu
-    // eksekusi selesai. Eksekusi Playwright sungguhan diisi di Step 9.
+    // eksekusi Playwright dan analysis selesai.
     enqueueTestRun(testRun.id);
     broadcastToRun(testRun.id, {
       type: 'run:status',

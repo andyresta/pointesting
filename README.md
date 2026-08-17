@@ -20,12 +20,13 @@ Repo: [andyresta/pointesting](https://github.com/andyresta/pointesting)
 - Live browser view melalui WebSocket + dashboard EJS/HTMX
 - Trace parser ringkas untuk input AI Analyzer
 - Provider adapter Claude/OpenAI/DeepSeek/Kimi/OpenCode + prompt builder terpusat
+- Analyzer service dengan fallback provider dan auto-analysis queue
+- Dashboard hasil AI realtime: status, alasan/root cause, solusi, dan bukti artifact
 - Katalog model AI dinamis (`POST /ai/models`) untuk Claude / OpenAI / DeepSeek / Kimi / OpenCode Zen
 
 ## Yang masih dikerjakan / belum ada
 
-- Analyzer service, fallback provider, dan penyimpanan hasil analysis
-- Klasifikasi hasil serta saran perbaikan di dashboard
+- Anomaly detection berbasis histori dan validasi akurasi klasifikasi
 - Test generation, self-healing selector, fixture & feature map (fase berikutnya)
 
 Progress detail: [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md)
