@@ -178,6 +178,10 @@ Dokumen ini menyimpan **konteks percakapan lintas sesi**. Dibaca di awal setiap 
 - List test case memperoleh `latestAnalysisResult` lewat satu `LEFT JOIN
   LATERAL` per project (bukan N+1), tanpa `raw_response`; badge latest diperbarui
   realtime dan juga muncul pada initial render dashboard.
+- Dashboard sampai Step 20 dapat dipakai tanpa setup via curl/API manual: project
+  dibuat dari dialog dengan status provider/model runtime, sedangkan test case
+  dibuat/diedit lewat step builder action-aware (goto/fill/click/check/select/
+  waitFor), pengurutan step, validasi, dan spinner submit.
 
 ---
 
@@ -348,6 +352,14 @@ Dokumen ini menyimpan **konteks percakapan lintas sesi**. Dibaca di awal setiap 
 ---
 
 ## Log sesi (append-only, terbaru di atas)
+
+### 2026-08-17 — CRUD UI Lengkap sampai Step 20
+- Dikerjakan: dialog create project, indikator konfigurasi provider/model,
+  create/edit test case, dynamic step builder, expected-result editor,
+  validasi, responsive layout, error state, dan spinner anti-double-submit.
+- Verifikasi: build OK, 30/30 test; E2E sekarang membuat project dan test case
+  melalui UI sebelum Run, lalu membuktikan live frame, artifact, analysis queue,
+  badge terbaru, dan tidak ada page error.
 
 ### 2026-08-17 — Dashboard Analysis Result (Step 20)
 - Keputusan: hasil AI tidak boleh tampil sebelum video/trace siap; event analysis

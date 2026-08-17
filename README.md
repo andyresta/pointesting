@@ -1,6 +1,6 @@
 # Pointesting — AI Testing Tool
 
-Alat **automate testing web apps** yang dibantu **AI**: menjalankan test case lewat browser (Playwright), merekam hasil, lalu (nanti) menganalisis kegagalan dengan multi-provider LLM.
+Alat **automate testing web apps** yang dibantu **AI**: menjalankan test case lewat browser (Playwright), merekam hasil, lalu menganalisisnya dengan multi-provider LLM.
 
 > **Status: masih dalam pengembangan (WIP).**  
 > **Fase 1 sudah selesai dan terverifikasi end-to-end.** Saat ini fokus **Fase 2 — AI Analyzer**. Belum production-ready.
@@ -18,6 +18,7 @@ Repo: [andyresta/pointesting](https://github.com/andyresta/pointesting)
 - Eksekusi Playwright: steps → browser, update status dan hasil per-step
 - Artifact final: video, trace, console log, network log + endpoint streaming
 - Live browser view melalui WebSocket + dashboard EJS/HTMX
+- CRUD project/test case dari dashboard dengan dynamic step builder
 - Trace parser ringkas untuk input AI Analyzer
 - Provider adapter Claude/OpenAI/DeepSeek/Kimi/OpenCode + prompt builder terpusat
 - Analyzer service dengan fallback provider dan auto-analysis queue
@@ -76,6 +77,13 @@ npm run dev
 
 Server default: `http://localhost:3000`  
 Health check: `GET /health` → `{ "status": "ok" }`
+
+### Testing manual dari UI
+
+1. Buka `http://localhost:3000/dashboard/login` dan login.
+2. Klik **Buat Project**, isi base URL target, lalu pilih provider AI.
+3. Klik **Tambah Test Case**, susun langkah dengan step builder, dan isi expected result.
+4. Klik **Run** untuk melihat live browser, status step, artifact, serta hasil analisis AI.
 
 ### Script utama
 

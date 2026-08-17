@@ -4,6 +4,8 @@ const pollTimers = new Map();
 const pendingAnalysisByRun = new Map();
 const TERMINAL_STATUSES = ['passed', 'failed', 'error'];
 const MAX_ANALYSIS_POLL_ATTEMPTS = 30;
+const providerCatalogs = new Map();
+const STEP_ACTIONS = ['goto', 'fill', 'click', 'check', 'select', 'waitFor'];
 
 /**
  * Keterangan: Menampilkan atau menyembunyikan spinner di tombol Run serta
@@ -572,6 +574,449 @@ async function startRun(button) {
 }
 
 /**
+ * Keterangan: Menyetel state loading pada tombol submit dialog agar request
+ * create/update tidak dapat terkirim dua kali.
+ */
+function setSubmitButtonLoading(button, isLoading) {
+  button.disabled = isLoading;
+  button.querySelector('.button-label').hidden = isLoading;
+  button.querySelector('.spinner').hidden = !isLoading;
+}
+
+/**
+ * Keterangan: Menampilkan pesan error aman pada form tanpa menyisipkan HTML
+ * dari response API.
+ */
+function showFormError(form, message) {
+  const errorElement = form.querySelector('.form-error');
+  errorElement.textContent = message;
+  errorElement.hidden = false;
+}
+
+/**
+ * Keterangan: Menghapus pesan error lama saat dialog dibuka atau submit baru
+ * dimulai.
+ */
+function clearFormError(form) {
+  const errorElement = form.querySelector('.form-error');
+  errorElement.textContent = '';
+  errorElement.hidden = true;
+}
+
+/**
+ * Keterangan: Mengirim request JSON terautentikasi dan mengubah response error
+ * API menjadi Error yang dapat langsung ditampilkan pada form.
+ */
+async function requestJson(url, method, body) {
+  const response = await fetch(url, {
+    method,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error ?? 'Request gagal diproses');
+  }
+  return data;
+}
+
+/**
+ * Keterangan: Memperbarui informasi model runtime dan kesiapan kredensial
+ * untuk provider yang dipilih pada form project.
+ */
+function updateProviderHint() {
+  const providerSelect = document.querySelector('#project-provider');
+  const hint = document.querySelector('#provider-model-hint');
+  if (!providerSelect || !hint) {
+    return;
+  }
+  const catalog = providerCatalogs.get(providerSelect.value);
+  if (!catalog) {
+    hint.textContent = 'Model runtime mengikuti konfigurasi environment provider.';
+    hint.className = 'field-hint';
+    return;
+  }
+  const readiness = catalog.configured
+    ? 'Provider siap digunakan.'
+    : 'API key provider belum dikonfigurasi.';
+  hint.textContent = `Model aktif: ${catalog.defaultModel || 'belum diatur'}. ${readiness}`;
+  hint.className = catalog.configured
+    ? 'field-hint'
+    : 'field-hint field-warning';
+}
+
+/**
+ * Keterangan: Mengambil katalog provider/model melalui POST agar form project
+ * menampilkan konfigurasi runtime tanpa mengekspos API key.
+ */
+async function loadProviderCatalogs() {
+  const providerSelect = document.querySelector('#project-provider');
+  if (!providerSelect) {
+    return;
+  }
+  const data = await requestJson('/ai/models', 'POST', {});
+  for (const catalog of data.providers ?? []) {
+    providerCatalogs.set(catalog.provider, catalog);
+    const option = providerSelect.querySelector(
+      `option[value="${catalog.provider}"]`,
+    );
+    if (option) {
+      option.textContent = `${option.textContent} · ${
+        catalog.configured ? 'siap' : 'belum dikonfigurasi'
+      }`;
+    }
+  }
+  updateProviderHint();
+}
+
+/**
+ * Keterangan: Membuat input berlabel untuk field step dan mengaktifkan
+ * validasi browser pada seluruh nilai action yang wajib.
+ */
+function createStepField(name, labelText, value, placeholder) {
+  const label = document.createElement('label');
+  label.className = 'step-field';
+  label.textContent = labelText;
+  const input = document.createElement('input');
+  input.name = name;
+  input.value = value ?? '';
+  input.placeholder = placeholder;
+  input.required = true;
+  input.autocomplete = 'off';
+  label.append(input);
+  return label;
+}
+
+/**
+ * Keterangan: Merender field yang sesuai dengan action step sehingga user
+ * tidak perlu menulis struktur JSON secara manual.
+ */
+function renderStepFields(row, step = {}) {
+  const action = row.querySelector('[name="action"]').value;
+  const fields = row.querySelector('.step-fields');
+  fields.replaceChildren();
+  if (action === 'goto') {
+    fields.append(
+      createStepField('url', 'URL / path', step.url, '/login atau https://…'),
+    );
+    return;
+  }
+  fields.append(
+    createStepField(
+      'selector',
+      'Selector',
+      step.selector,
+      '[data-testid="submit"]',
+    ),
+  );
+  if (action === 'fill' || action === 'select') {
+    fields.append(
+      createStepField('value', 'Value', step.value, 'Nilai input'),
+    );
+  }
+}
+
+/**
+ * Keterangan: Menomori ulang step dan memperbarui kondisi tombol urutan/hapus
+ * setelah step ditambah, dipindah, atau dihapus.
+ */
+function refreshStepRows() {
+  const rows = [...document.querySelectorAll('#step-list .step-builder-row')];
+  rows.forEach((row, index) => {
+    row.querySelector('.step-number').textContent = `Step ${index + 1}`;
+    row.querySelector('[data-move="up"]').disabled = index === 0;
+    row.querySelector('[data-move="down"]').disabled = index === rows.length - 1;
+    row.querySelector('[data-remove-step]').disabled = rows.length === 1;
+  });
+}
+
+/**
+ * Keterangan: Membuat satu baris step interaktif lengkap dengan pilihan action,
+ * field kontekstual, pengurutan, dan penghapusan.
+ */
+function createStepRow(step = { action: 'goto' }) {
+  const row = document.createElement('article');
+  row.className = 'step-builder-row';
+
+  const header = document.createElement('div');
+  header.className = 'step-builder-header';
+  const number = document.createElement('strong');
+  number.className = 'step-number';
+  const controls = document.createElement('div');
+  controls.className = 'step-controls';
+
+  for (const [direction, label] of [
+    ['up', 'Naik'],
+    ['down', 'Turun'],
+  ]) {
+    const moveButton = document.createElement('button');
+    moveButton.type = 'button';
+    moveButton.className = 'small-button';
+    moveButton.dataset.move = direction;
+    moveButton.textContent = label;
+    moveButton.addEventListener('click', () => {
+      const sibling =
+        direction === 'up' ? row.previousElementSibling : row.nextElementSibling;
+      if (sibling) {
+        if (direction === 'up') {
+          sibling.before(row);
+        } else {
+          sibling.after(row);
+        }
+        refreshStepRows();
+      }
+    });
+    controls.append(moveButton);
+  }
+
+  const removeButton = document.createElement('button');
+  removeButton.type = 'button';
+  removeButton.className = 'small-button danger-button';
+  removeButton.dataset.removeStep = '';
+  removeButton.textContent = 'Hapus';
+  removeButton.addEventListener('click', () => {
+    row.remove();
+    refreshStepRows();
+  });
+  controls.append(removeButton);
+  header.append(number, controls);
+
+  const actionLabel = document.createElement('label');
+  actionLabel.className = 'step-action';
+  actionLabel.textContent = 'Action';
+  const actionSelect = document.createElement('select');
+  actionSelect.name = 'action';
+  for (const action of STEP_ACTIONS) {
+    const option = document.createElement('option');
+    option.value = action;
+    option.textContent = action;
+    option.selected = action === step.action;
+    actionSelect.append(option);
+  }
+  actionSelect.addEventListener('change', () => renderStepFields(row));
+  actionLabel.append(actionSelect);
+
+  const fields = document.createElement('div');
+  fields.className = 'step-fields';
+  row.append(header, actionLabel, fields);
+  renderStepFields(row, step);
+  return row;
+}
+
+/**
+ * Keterangan: Menambahkan step baru ke builder dan menjaga penomoran serta
+ * fokus input agar pengisian keyboard tetap nyaman.
+ */
+function addStep(step) {
+  const list = document.querySelector('#step-list');
+  const row = createStepRow(step);
+  list.append(row);
+  refreshStepRows();
+  row.querySelector('select').focus();
+}
+
+/**
+ * Keterangan: Mengubah seluruh baris builder menjadi payload steps sesuai
+ * schema API tanpa membawa field yang tidak relevan.
+ */
+function collectSteps() {
+  return [...document.querySelectorAll('#step-list .step-builder-row')].map(
+    (row) => {
+      const action = row.querySelector('[name="action"]').value;
+      if (action === 'goto') {
+        return { action, url: row.querySelector('[name="url"]').value.trim() };
+      }
+      const step = {
+        action,
+        selector: row.querySelector('[name="selector"]').value.trim(),
+      };
+      const valueInput = row.querySelector('[name="value"]');
+      if (valueInput) {
+        step.value = valueInput.value.trim();
+      }
+      return step;
+    },
+  );
+}
+
+/**
+ * Keterangan: Membuka form project dalam kondisi bersih untuk membuat data
+ * baru dari dashboard.
+ */
+function openProjectDialog() {
+  const dialog = document.querySelector('#project-dialog');
+  const form = document.querySelector('#project-form');
+  form.reset();
+  clearFormError(form);
+  updateProviderHint();
+  dialog.showModal();
+  form.elements.name.focus();
+}
+
+/**
+ * Keterangan: Membuka form test case untuk mode create atau edit dan mengisi
+ * builder dari data test case yang sudah ada.
+ */
+function openTestCaseDialog(projectId, testCase = null) {
+  const dialog = document.querySelector('#test-case-dialog');
+  const form = document.querySelector('#test-case-form');
+  form.reset();
+  clearFormError(form);
+  form.elements.projectId.value = projectId;
+  form.elements.testCaseId.value = testCase?.id ?? '';
+  form.elements.title.value = testCase?.title ?? '';
+  form.elements.expected.value = Array.isArray(testCase?.expected)
+    ? testCase.expected.join('\n')
+    : '';
+  document.querySelector('#test-case-dialog-title').textContent = testCase
+    ? 'Edit Test Case'
+    : 'Tambah Test Case';
+
+  const stepList = document.querySelector('#step-list');
+  stepList.replaceChildren();
+  const steps =
+    Array.isArray(testCase?.steps) && testCase.steps.length > 0
+      ? testCase.steps
+      : [{ action: 'goto' }];
+  for (const step of steps) {
+    stepList.append(createStepRow(step));
+  }
+  refreshStepRows();
+  dialog.showModal();
+  form.elements.title.focus();
+}
+
+/**
+ * Keterangan: Menyimpan project baru melalui API lalu memuat ulang dashboard
+ * agar struktur project hasil server langsung tampil konsisten.
+ */
+async function submitProjectForm(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  if (!form.reportValidity()) {
+    return;
+  }
+  const submitButton = form.querySelector('.submit-button');
+  clearFormError(form);
+  setSubmitButtonLoading(submitButton, true);
+  try {
+    const baseUrl = form.elements.baseUrl.value.trim();
+    await requestJson('/projects', 'POST', {
+      name: form.elements.name.value.trim(),
+      baseUrl: baseUrl || null,
+      defaultProvider: form.elements.defaultProvider.value,
+    });
+    window.location.reload();
+  } catch (error) {
+    showFormError(
+      form,
+      error instanceof Error ? error.message : 'Project gagal disimpan',
+    );
+    setSubmitButtonLoading(submitButton, false);
+  }
+}
+
+/**
+ * Keterangan: Menyimpan test case create/edit dari step builder memakai
+ * kontrak API yang tersedia dan spinner tombol selama request berjalan.
+ */
+async function submitTestCaseForm(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  if (!form.reportValidity()) {
+    return;
+  }
+  const expected = form.elements.expected.value
+    .split('\n')
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (expected.length === 0) {
+    showFormError(form, 'Expected result wajib minimal satu baris.');
+    return;
+  }
+
+  const submitButton = form.querySelector('.submit-button');
+  clearFormError(form);
+  setSubmitButtonLoading(submitButton, true);
+  const testCaseId = form.elements.testCaseId.value;
+  const projectId = form.elements.projectId.value;
+  try {
+    await requestJson(
+      testCaseId
+        ? `/test-cases/${testCaseId}`
+        : `/projects/${projectId}/test-cases`,
+      testCaseId ? 'PATCH' : 'POST',
+      {
+        title: form.elements.title.value.trim(),
+        steps: collectSteps(),
+        expected,
+      },
+    );
+    window.location.reload();
+  } catch (error) {
+    showFormError(
+      form,
+      error instanceof Error ? error.message : 'Test case gagal disimpan',
+    );
+    setSubmitButtonLoading(submitButton, false);
+  }
+}
+
+/**
+ * Keterangan: Memasang seluruh event dialog CRUD dashboard satu kali setelah
+ * token tersedia dan elemen halaman siap.
+ */
+function initializeManagementUi() {
+  const projectForm = document.querySelector('#project-form');
+  const testCaseForm = document.querySelector('#test-case-form');
+  if (!projectForm || !testCaseForm) {
+    return;
+  }
+  document
+    .querySelector('#new-project-button')
+    .addEventListener('click', openProjectDialog);
+  document
+    .querySelector('#project-provider')
+    .addEventListener('change', updateProviderHint);
+  document
+    .querySelector('#add-step-button')
+    .addEventListener('click', () => addStep({ action: 'goto' }));
+  projectForm.addEventListener('submit', (event) => void submitProjectForm(event));
+  testCaseForm.addEventListener('submit', (event) =>
+    void submitTestCaseForm(event),
+  );
+
+  document.querySelectorAll('[data-close-dialog]').forEach((button) => {
+    button.addEventListener('click', () => button.closest('dialog').close());
+  });
+  document.querySelectorAll('.add-test-case-button').forEach((button) => {
+    button.addEventListener('click', () =>
+      openTestCaseDialog(button.dataset.projectId),
+    );
+  });
+  document.querySelectorAll('.edit-test-case-button').forEach((button) => {
+    button.addEventListener('click', () => {
+      const article = button.closest('.test-case');
+      try {
+        openTestCaseDialog(
+          article.dataset.projectId,
+          JSON.parse(article.dataset.testCase),
+        );
+      } catch {
+        openTestCaseDialog(article.dataset.projectId);
+        showFormError(
+          testCaseForm,
+          'Data test case gagal dibaca. Muat ulang dashboard.',
+        );
+      }
+    });
+  });
+}
+
+/**
  * Keterangan: Menutup seluruh subscription ketika halaman ditinggalkan agar
  * subscriber gateway segera dibersihkan.
  */
@@ -584,14 +1029,27 @@ function closeActiveSockets() {
   }
 }
 
-if (!token) {
-  window.location.replace('/dashboard/login');
-} else {
+/**
+ * Keterangan: Menginisialisasi dashboard, memuat katalog provider saat spinner
+ * halaman aktif, lalu menampilkan seluruh fitur CRUD dan eksekusi.
+ */
+async function initializeDashboard() {
+  if (!token) {
+    window.location.replace('/dashboard/login');
+    return;
+  }
+  initializeManagementUi();
   document.querySelectorAll('.run-button').forEach((button) => {
     button.addEventListener('click', () => void startRun(button));
   });
+  try {
+    await loadProviderCatalogs();
+  } catch {
+    updateProviderHint();
+  }
   document.querySelector('#page-loading').hidden = true;
   document.querySelector('#dashboard-content').hidden = false;
 }
 
+void initializeDashboard();
 window.addEventListener('beforeunload', closeActiveSockets);

@@ -19,19 +19,20 @@
         <div>
           <p class="eyebrow">Pointesting</p>
           <h1>Test Dashboard</h1>
-          <p class="muted">Jalankan test case, pantau browser secara live, lalu lihat artifact.</p>
+          <p class="muted">Kelola project dan test case, jalankan browser, lalu lihat artifact serta analisis AI.</p>
         </div>
+        <button id="new-project-button" type="button">Buat Project</button>
       </header>
 
       <% if (projects.length === 0) { %>
         <section class="empty-state">
           <h2>Belum ada project</h2>
-          <p class="muted">Buat project dan test case melalui REST API terlebih dahulu.</p>
+          <p class="muted">Klik “Buat Project” untuk memulai pengujian langsung dari UI.</p>
         </section>
       <% } %>
 
       <% projects.forEach((project) => { %>
-        <section class="project-card">
+        <section class="project-card" data-project-id="<%= project.id %>">
           <div class="project-heading">
             <div>
               <h2><%= project.name %></h2>
@@ -39,7 +40,14 @@
                 <p class="muted"><%= project.baseUrl %></p>
               <% } %>
             </div>
-            <span class="count"><%= project.testCases.length %> test case</span>
+            <div class="project-actions">
+              <span class="count"><%= project.testCases.length %> test case</span>
+              <button
+                class="secondary-button add-test-case-button"
+                type="button"
+                data-project-id="<%= project.id %>"
+              >Tambah Test Case</button>
+            </div>
           </div>
 
           <% if (project.testCases.length === 0) { %>
@@ -47,7 +55,17 @@
           <% } %>
 
           <% project.testCases.forEach((testCase) => { %>
-            <article class="test-case" data-test-case-id="<%= testCase.id %>">
+            <article
+              class="test-case"
+              data-test-case-id="<%= testCase.id %>"
+              data-project-id="<%= project.id %>"
+              data-test-case="<%= JSON.stringify({
+                id: testCase.id,
+                title: testCase.title,
+                steps: testCase.steps,
+                expected: testCase.expected
+              }) %>"
+            >
               <div class="test-case-row">
                 <div>
                   <h3><%= testCase.title %></h3>
@@ -64,10 +82,13 @@
                     <% } %>
                   </div>
                 </div>
-                <button class="run-button" type="button" data-test-case-id="<%= testCase.id %>">
-                  <span class="button-label">Run</span>
-                  <span class="spinner spinner-small" aria-hidden="true" hidden></span>
-                </button>
+                <div class="test-case-actions">
+                  <button class="secondary-button edit-test-case-button" type="button">Edit</button>
+                  <button class="run-button" type="button" data-test-case-id="<%= testCase.id %>">
+                    <span class="button-label">Run</span>
+                    <span class="spinner spinner-small" aria-hidden="true" hidden></span>
+                  </button>
+                </div>
               </div>
 
               <section class="run-panel" aria-live="polite" hidden>
@@ -89,5 +110,96 @@
         </section>
       <% }); %>
     </main>
+
+    <dialog id="project-dialog" class="app-dialog">
+      <form id="project-form" class="dialog-form" hx-boost="false">
+        <div class="dialog-header">
+          <div>
+            <p class="eyebrow">Project</p>
+            <h2>Buat Project</h2>
+          </div>
+          <button class="icon-button" type="button" data-close-dialog aria-label="Tutup">×</button>
+        </div>
+        <label>
+          Nama project
+          <input name="name" required maxlength="120" autocomplete="off" />
+        </label>
+        <label>
+          Base URL aplikasi (opsional)
+          <input
+            name="baseUrl"
+            type="url"
+            placeholder="https://example.com"
+            autocomplete="url"
+          />
+        </label>
+        <label>
+          Default AI provider
+          <select name="defaultProvider" id="project-provider" required>
+            <option value="claude">Claude</option>
+            <option value="openai">OpenAI</option>
+            <option value="deepseek">DeepSeek</option>
+            <option value="kimi">Kimi</option>
+            <option value="opencode">OpenCode Zen</option>
+          </select>
+        </label>
+        <p id="provider-model-hint" class="field-hint">
+          Model runtime mengikuti konfigurasi environment provider.
+        </p>
+        <p class="alert form-error" hidden></p>
+        <div class="dialog-actions">
+          <button class="secondary-button" type="button" data-close-dialog>Batal</button>
+          <button class="submit-button" type="submit">
+            <span class="button-label">Simpan Project</span>
+            <span class="spinner spinner-small" aria-hidden="true" hidden></span>
+          </button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="test-case-dialog" class="app-dialog app-dialog-wide">
+      <form id="test-case-form" class="dialog-form" hx-boost="false">
+        <input name="projectId" type="hidden" />
+        <input name="testCaseId" type="hidden" />
+        <div class="dialog-header">
+          <div>
+            <p class="eyebrow">Test Case</p>
+            <h2 id="test-case-dialog-title">Tambah Test Case</h2>
+          </div>
+          <button class="icon-button" type="button" data-close-dialog aria-label="Tutup">×</button>
+        </div>
+        <label>
+          Judul test case
+          <input name="title" required maxlength="160" autocomplete="off" />
+        </label>
+        <div class="form-section">
+          <div class="form-section-heading">
+            <div>
+              <h3>Langkah pengujian</h3>
+              <p class="field-hint">Langkah dijalankan berurutan dari atas ke bawah.</p>
+            </div>
+            <button id="add-step-button" class="secondary-button" type="button">Tambah Step</button>
+          </div>
+          <div id="step-list" class="step-builder"></div>
+        </div>
+        <label>
+          Expected result
+          <textarea
+            name="expected"
+            required
+            rows="4"
+            placeholder="Satu expected result per baris"
+          ></textarea>
+        </label>
+        <p class="alert form-error" hidden></p>
+        <div class="dialog-actions">
+          <button class="secondary-button" type="button" data-close-dialog>Batal</button>
+          <button class="submit-button" type="submit">
+            <span class="button-label">Simpan Test Case</span>
+            <span class="spinner spinner-small" aria-hidden="true" hidden></span>
+          </button>
+        </div>
+      </form>
+    </dialog>
   </body>
 </html>

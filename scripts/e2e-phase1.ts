@@ -175,8 +175,8 @@ function createE2eAnalyzerProvider(): AnalyzerProvider {
 }
 
 /**
- * Keterangan: Menjalankan acceptance E2E dari dashboard sampai live frame,
- * empat artifact, lalu auto-analysis queue dan persistensi hasil Step 18–19.
+ * Keterangan: Menjalankan acceptance E2E mulai dari CRUD project/test case di
+ * dashboard, live frame, empat artifact, lalu auto-analysis dan persistensinya.
  */
 async function runPhaseOneE2e(): Promise<void> {
   const app = buildServer();
@@ -193,34 +193,6 @@ async function runPhaseOneE2e(): Promise<void> {
       target.listen({ host: '127.0.0.1', port: 0 }),
     ]);
     const token = signAuthToken(config.AUTH_USERNAME);
-
-    const project = await readSuccessfulJson<CreatedResource>(
-      await callApi(appUrl, token, '/projects', {
-        method: 'POST',
-        body: JSON.stringify({
-          name: `E2E Fase 1 ${Date.now()}`,
-          baseUrl: targetUrl,
-        }),
-      }),
-    );
-    projectId = project.id;
-
-    const testCase = await readSuccessfulJson<CreatedResource>(
-      await callApi(appUrl, token, `/projects/${project.id}/test-cases`, {
-        method: 'POST',
-        body: JSON.stringify({
-          title: 'Login target lokal melalui dashboard',
-          steps: [
-            { action: 'goto', url: '/login' },
-            { action: 'fill', selector: '#username', value: 'demo-user' },
-            { action: 'fill', selector: '#password', value: 'demo-value' },
-            { action: 'click', selector: '#submit' },
-            { action: 'waitFor', selector: '#success' },
-          ],
-          expected: ['Elemen #success muncul'],
-        }),
-      }),
-    );
 
     browser = await chromium.launch();
     const context = await browser.newContext();
@@ -244,6 +216,84 @@ async function runPhaseOneE2e(): Promise<void> {
     const pageErrors: string[] = [];
     collectPageErrors(page, pageErrors);
     await page.goto(`${appUrl}/dashboard`);
+
+    const projectName = `E2E Fase 1 ${Date.now()}`;
+    await page.getByRole('button', { name: 'Buat Project' }).click();
+    await page.locator('#project-form [name="name"]').fill(projectName);
+    await page.locator('#project-form [name="baseUrl"]').fill(targetUrl);
+    const projectResponsePromise = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'POST' &&
+        response.url().endsWith('/projects'),
+    );
+    await page.locator('#project-form .submit-button').click();
+    const projectResponse = await projectResponsePromise;
+    if (projectResponse.status() !== 201) {
+      throw new Error(`Create project UI gagal: HTTP ${projectResponse.status()}`);
+    }
+    const projectResult = await pool.query<CreatedResource>(
+      'SELECT id FROM project WHERE name = $1 ORDER BY created_at DESC LIMIT 1',
+      [projectName],
+    );
+    const project = projectResult.rows[0];
+    if (!project) {
+      throw new Error('Project hasil UI tidak tersimpan di database');
+    }
+    projectId = project.id;
+
+    const projectCard = page.locator(
+      `.project-card[data-project-id="${project.id}"]`,
+    );
+    await projectCard
+      .getByRole('button', { name: 'Tambah Test Case' })
+      .waitFor();
+    await projectCard.getByRole('button', { name: 'Tambah Test Case' }).click();
+    await page
+      .locator('#test-case-form [name="title"]')
+      .fill('Login target lokal melalui dashboard');
+    await page.locator('.step-builder-row [name="url"]').fill('/login');
+    const steps = [
+      { action: 'fill', selector: '#username', value: 'demo-user' },
+      { action: 'fill', selector: '#password', value: 'demo-value' },
+      { action: 'click', selector: '#submit' },
+      { action: 'waitFor', selector: '#success' },
+    ];
+    for (const [index, step] of steps.entries()) {
+      await page.locator('#add-step-button').click();
+      const row = page.locator('.step-builder-row').nth(index + 1);
+      await row.locator('[name="action"]').selectOption(step.action);
+      await row.locator('[name="selector"]').fill(step.selector);
+      if (step.value) {
+        await row.locator('[name="value"]').fill(step.value);
+      }
+    }
+    await page
+      .locator('#test-case-form [name="expected"]')
+      .fill('Elemen #success muncul');
+    const testCaseResponsePromise = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'POST' &&
+        response.url().endsWith(`/projects/${project.id}/test-cases`),
+    );
+    await page.locator('#test-case-form .submit-button').click();
+    const testCaseResponse = await testCaseResponsePromise;
+    if (testCaseResponse.status() !== 201) {
+      throw new Error(
+        `Create test case UI gagal: HTTP ${testCaseResponse.status()}`,
+      );
+    }
+    const testCaseResult = await pool.query<CreatedResource>(
+      `SELECT id FROM test_case
+       WHERE project_id = $1 AND title = $2
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [project.id, 'Login target lokal melalui dashboard'],
+    );
+    const testCase = testCaseResult.rows[0];
+    if (!testCase) {
+      throw new Error('Test case hasil UI tidak tersimpan di database');
+    }
+
     const runButton = page.locator(
       `.run-button[data-test-case-id="${testCase.id}"]`,
     );
@@ -396,6 +446,7 @@ async function runPhaseOneE2e(): Promise<void> {
     console.log(
       JSON.stringify({
         status: detail.status,
+        dashboardCrud: true,
         liveFrame: true,
         dashboardVideo: true,
         artifactTypes: requiredTypes,

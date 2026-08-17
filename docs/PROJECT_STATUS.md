@@ -60,7 +60,7 @@ Referensi: `roadmap-ai-testing-tool.md`, `arsitektur-spesifikasi-teknis.md`, `ex
 | 17 | Prompt Builder | Done | 2026-08-16 | 2026-08-16 | Filter/dedup console+network, sanitasi URL, trace + screenshot opsional; E2E AnalyzerInput valid |
 | 18 | Analyzer Service (Provider Selection + Fallback) | Done | 2026-08-17 | 2026-08-17 | Default provider + fallback terkonfigurasi; hasil/provider/raw response tersimpan dan broadcast |
 | 19 | Integrasi Analyzer ke Queue | Done | 2026-08-17 | 2026-08-17 | Semua status terminal auto-enqueue; failure boundary mencegah error analysis menjatuhkan worker |
-| 20 | Update Dashboard untuk Analysis Result | Done | 2026-08-17 | 2026-08-17 | Realtime panel + resync, empat warna status, evidence-gated, latest badge/API tanpa N+1 |
+| 20 | Update Dashboard untuk Analysis Result | Done | 2026-08-17 | 2026-08-17 | CRUD project/test case via UI + step builder; realtime analysis, evidence-gated, latest badge/API tanpa N+1 |
 | 21 | Anomaly Detection Berbasis Histori | Planning | | | |
 | 22 | Testing & Validasi Akurasi Klasifikasi | Planning | | | |
 
