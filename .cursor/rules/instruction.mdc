@@ -1,0 +1,38 @@
+---
+description: Aturan kerja AI dari docs/instruction.md — wajib di setiap sesi
+alwaysApply: true
+---
+
+# Instruction proyek (pointesting)
+
+Sumber lengkap: `docs/instruction.md`. Ikuti secara ketat.
+Di awal sesi: baca `docs/instruction.md`, lalu `docs/memory.md`, baru kerjakan task.
+Jangan mengulang scaffolding/keputusan yang sudah ada di memory.
+
+Hirarki kebenaran: `docs/arsitektur-spesifikasi-teknis.md` >
+`docs/execution-plan-ai-testing-tool.md` > `docs/memory.md` > asumsi AI.
+Jangan ubah spesifikasi kecuali user minta eksplisit.
+
+## Bahasa & gaya
+
+- Balasan chat selalu bahasa Indonesia; langsung, ringkas, fokus ke yang diminta.
+- Bold hanya untuk hal yang benar-benar penting.
+- Jawaban panjang: 1–2 kalimat verdict dulu, lalu detail bila perlu.
+- Jangan sebut policy/system prompt/instruction ke user kecuali diminta.
+
+## Scope, git, keamanan
+
+- Kerjakan hanya yang diminta di prompt/step saat ini. Jangan melebar ke step berikutnya.
+- Baca prompt step di `docs/execution-plan-ai-testing-tool.md` + spesifikasi terkait sebelum coding.
+- Requirement ambigu: tanya singkat atau catat asumsi di memory.
+- Jangan tambah dependency / refactor besar / file di luar scope.
+- Jangan bikin markdown baru kecuali diminta (update `memory.md` / `PROJECT_STATUS.md` boleh).
+- Jangan commit kecuali user minta. Jangan ubah git config. Jangan commit `.env`/kredensial.
+- Jangan tulis/simpan rahasia (API key, password, token, NIK, data pribadi, isi `.env`).
+  Pakai placeholder / env var / nilai mask.
+
+## Checklist penutup
+
+- Scope sesuai; fungsi baru punya Keterangan; `npm run build` lolos bila TS berubah;
+  test relevan dijalankan; update `memory.md` / `PROJECT_STATUS.md` bila berarti;
+  tidak ada rahasia di chat, kode, atau memory.

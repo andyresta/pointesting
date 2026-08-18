@@ -242,6 +242,23 @@ test('OpenCode memilih endpoint resmi berdasarkan keluarga model', async () => {
   }
 });
 
+test('OpenCode Go memakai base URL terpisah dengan API key yang sama', async () => {
+  const capture: CapturedRequest = {};
+  const client = new OpenCodeLLMClient({
+    apiKey: 'key-placeholder',
+    model: 'deepseek-v4-pro',
+    providerName: 'opencode-go',
+    fetchImpl: createFetchMock(
+      { choices: [{ message: { content: '{}' } }] },
+      capture,
+    ),
+  });
+  await client.complete('system', ['user']);
+  expect(capture.url).toBe(
+    'https://opencode.ai/zen/go/v1/chat/completions',
+  );
+});
+
 test('rate limit dinormalisasi menjadi ProviderError retryable', async () => {
   const capture: CapturedRequest = {};
   const client = new DeepSeekLLMClient({
@@ -257,5 +274,5 @@ test('rate limit dinormalisasi menjadi ProviderError retryable', async () => {
     statusCode: 429,
     retryable: true,
   });
-  expect(capture.calls).toBe(2);
+  expect(capture.calls).toBe(3);
 });

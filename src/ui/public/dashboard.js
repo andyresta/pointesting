@@ -6,6 +6,55 @@ const TERMINAL_STATUSES = ['passed', 'failed', 'error'];
 const MAX_ANALYSIS_POLL_ATTEMPTS = 30;
 const providerCatalogs = new Map();
 const STEP_ACTIONS = ['goto', 'fill', 'click', 'check', 'select', 'waitFor'];
+const PROVIDER_LABELS = {
+  claude: 'Claude',
+  openai: 'OpenAI',
+  deepseek: 'DeepSeek',
+  kimi: 'Kimi',
+  opencode: 'OpenCode Zen',
+  'opencode-go': 'OpenCode Go',
+};
+const ICON_TRASH = [
+  'M3 6h18',
+  'M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6',
+  'M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2',
+];
+
+/**
+ * Keterangan: Membuat SVG ikon stroke untuk tombol aksi tanpa library ikon.
+ */
+function createIconSvg(paths) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '2');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.classList.add('button-icon');
+  for (const d of paths) {
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', d);
+    svg.append(path);
+  }
+  return svg;
+}
+
+/**
+ * Keterangan: Menampilkan spinner di tombol ikon (edit/hapus) selama request.
+ */
+function setIconButtonLoading(button, isLoading) {
+  button.disabled = isLoading;
+  const icon = button.querySelector('.button-icon');
+  const spinner = button.querySelector('.spinner');
+  if (icon) {
+    icon.hidden = isLoading;
+  }
+  if (spinner) {
+    spinner.hidden = !isLoading;
+  }
+}
 
 /**
  * Keterangan: Menampilkan atau menyembunyikan spinner di tombol Run serta
@@ -574,6 +623,185 @@ async function startRun(button) {
 }
 
 /**
+ * Keterangan: Menambahkan baris status ke panel kiri generate agar progres
+ * AI (menganalisis, generate, simpan) terlihat berurutan.
+ */
+function appendGenerateLog(panel, message, className = 'active') {
+  const list = panel.querySelector('.generate-log-list');
+  if (!list) {
+    return;
+  }
+  list.querySelectorAll('.generate-log-item.active').forEach((item) => {
+    item.classList.remove('active');
+  });
+  const item = document.createElement('li');
+  item.className = `generate-log-item ${className}`;
+  item.textContent = message;
+  list.append(item);
+  item.scrollIntoView({ block: 'nearest' });
+}
+
+/**
+ * Keterangan: Menampilkan judul dan keterangan test case yang baru jadi
+ * pada log generate sebelum dashboard dimuat ulang.
+ */
+function appendGeneratedTestCases(panel, testCases) {
+  const list = panel.querySelector('.generate-log-list');
+  if (!list) {
+    return;
+  }
+  for (const testCase of testCases) {
+    const item = document.createElement('li');
+    item.className = 'generate-log-item done';
+    const title = document.createElement('div');
+    title.className = 'generate-result-title';
+    title.textContent = testCase.title;
+    const description = document.createElement('div');
+    description.className = 'generate-result-desc';
+    description.textContent = testCase.description || 'Tidak ada keterangan';
+    item.append(title, description);
+    list.append(item);
+  }
+}
+
+/**
+ * Keterangan: Mengembalikan panel generate ke state awal sebelum job baru.
+ */
+function resetGeneratePanel(panel) {
+  const list = panel.querySelector('.generate-log-list');
+  list?.replaceChildren();
+  const placeholder = panel.querySelector('.live-placeholder');
+  if (placeholder) {
+    placeholder.hidden = false;
+    placeholder.textContent = 'Menunggu tampilan Playwright…';
+  }
+  const image = panel.querySelector('.live-frame');
+  if (image) {
+    image.hidden = true;
+    image.removeAttribute('src');
+  }
+  updateStatus(panel, 'queued');
+}
+
+/**
+ * Keterangan: Memproses event live generate: frame Playwright, status AI,
+ * hasil test case, atau error.
+ */
+function handleGenerateEvent(event, generateId, panel) {
+  if (event.runId !== generateId || panel.dataset.activeGenerateId !== generateId) {
+    return;
+  }
+
+  if (event.type === 'run:frame') {
+    const image = panel.querySelector('.live-frame');
+    if (!image) {
+      return;
+    }
+    image.src = `data:image/jpeg;base64,${event.frame}`;
+    image.hidden = false;
+    const placeholder = panel.querySelector('.live-placeholder');
+    if (placeholder) {
+      placeholder.hidden = true;
+    }
+  } else if (event.type === 'generate:status') {
+    updateStatus(panel, event.phase === 'done' ? 'passed' : 'running');
+    appendGenerateLog(panel, event.message, 'active');
+  } else if (event.type === 'generate:done') {
+    updateStatus(panel, 'passed');
+    appendGeneratedTestCases(panel, event.testCases ?? []);
+    panel.dataset.finished = 'true';
+    closeSocketForRun(generateId);
+    window.setTimeout(() => {
+      window.location.href = '/dashboard';
+    }, 1600);
+  } else if (event.type === 'generate:error') {
+    updateStatus(panel, 'error');
+    appendGenerateLog(
+      panel,
+      event.message || 'Generate test case gagal',
+      'error',
+    );
+    panel.dataset.finished = 'true';
+    closeSocketForRun(generateId);
+  }
+}
+
+/**
+ * Keterangan: Subscribe WebSocket ke generateId (reuse channel run) agar
+ * log kiri dan frame Playwright kanan ter-update tanpa reload.
+ */
+function watchGenerate(generateId, panel) {
+  const previousId = panel.dataset.activeGenerateId;
+  if (previousId && previousId !== generateId) {
+    closeSocketForRun(previousId);
+  }
+
+  panel.dataset.activeGenerateId = generateId;
+  panel.dataset.finished = 'false';
+  const socket = new WebSocket(createWebSocketUrl());
+  activeSockets.set(generateId, socket);
+
+  socket.addEventListener('open', () => {
+    socket.send(JSON.stringify({ type: 'subscribe:run', runId: generateId }));
+  });
+  socket.addEventListener('message', (message) => {
+    try {
+      const event = JSON.parse(message.data);
+      handleGenerateEvent(event, generateId, panel);
+    } catch {
+      // Event malformed diabaikan; koneksi tetap dipertahankan.
+    }
+  });
+  socket.addEventListener('close', () => {
+    activeSockets.delete(generateId);
+    if (panel.dataset.activeGenerateId !== generateId || panel.dataset.finished === 'true') {
+      return;
+    }
+    appendGenerateLog(
+      panel,
+      'Koneksi live terputus. Generate tetap berjalan di server — muat ulang beberapa saat lagi bila hasil belum muncul.',
+      'error',
+    );
+  });
+}
+
+/**
+ * Keterangan: Menampilkan panel generate lalu subscribe job live (log + Playwright).
+ */
+function startGenerate(projectId, generateId) {
+  const panel = document.querySelector('.generate-panel');
+  if (!panel) {
+    window.location.href = `/dashboard/projects/${projectId}/generate`;
+    return;
+  }
+
+  panel.hidden = false;
+  resetGeneratePanel(panel);
+  appendGenerateLog(panel, 'Menunggu Playwright…', 'active');
+  watchGenerate(generateId, panel);
+}
+
+/**
+ * Keterangan: Membuka halaman generate full-width bila instruction sudah
+ * tersimpan; jika belum, minta user menyimpan Instruction dulu.
+ */
+function startGenerateFromProject(event) {
+  const button = event.currentTarget;
+  const projectId = button.dataset.projectId;
+  const card = button.closest('.project-card');
+  let project = {};
+  try {
+    project = JSON.parse(card?.dataset.project || '{}');
+  } catch {
+    project = {};
+  }
+  if (!project.instruction?.trim()) {
+    event.preventDefault();
+    window.alert('Simpan Instruction dulu lewat tombol Instruction.');
+  }
+}
+
+/**
  * Keterangan: Menyetel state loading pada tombol submit dialog agar request
  * create/update tidak dapat terkirim dua kali.
  */
@@ -624,28 +852,49 @@ async function requestJson(url, method, body) {
 }
 
 /**
- * Keterangan: Memperbarui informasi model runtime dan kesiapan kredensial
- * untuk provider yang dipilih pada form project.
+ * Keterangan: Mengambil provider yang dicentang Default pada daftar API key.
+ */
+function getSelectedDefaultProvider() {
+  const checked = document.querySelector(
+    '#provider-key-list [name="isDefault"]:checked',
+  );
+  return (
+    checked?.closest('.provider-key-row')?.querySelector('[name="providerName"]')
+      ?.value ?? ''
+  );
+}
+
+/**
+ * Keterangan: Memastikan hanya satu baris provider yang berstatus Default.
+ */
+function setExclusiveDefault(selectedRow) {
+  document.querySelectorAll('#provider-key-list .provider-key-row').forEach((row) => {
+    const box = row.querySelector('[name="isDefault"]');
+    if (box) {
+      box.checked = row === selectedRow;
+    }
+  });
+  updateProviderHint();
+}
+
+/**
+ * Keterangan: Memperbarui petunjuk model sesuai provider yang dicentang Default.
  */
 function updateProviderHint() {
-  const providerSelect = document.querySelector('#project-provider');
   const hint = document.querySelector('#provider-model-hint');
-  if (!providerSelect || !hint) {
+  if (!hint) {
     return;
   }
-  const catalog = providerCatalogs.get(providerSelect.value);
-  if (!catalog) {
-    hint.textContent = 'Model runtime mengikuti konfigurasi environment provider.';
-    hint.className = 'field-hint';
+  const provider = getSelectedDefaultProvider();
+  const productNote =
+    provider === 'opencode' || provider === 'opencode-go'
+      ? ' OpenCode Zen dan Go bisa memakai API key yang sama, tempel di baris masing-masing. Go butuh subscription.'
+      : '';
+  if (!provider) {
+    hint.textContent = `Centang Default pada satu baris. Urutan baris = urutan fallback.${productNote}`;
     return;
   }
-  const readiness = catalog.configured
-    ? 'Provider siap digunakan.'
-    : 'API key provider belum dikonfigurasi.';
-  hint.textContent = `Model aktif: ${catalog.defaultModel || 'belum diatur'}. ${readiness}`;
-  hint.className = catalog.configured
-    ? 'field-hint'
-    : 'field-hint field-warning';
+  hint.textContent = `Default: ${PROVIDER_LABELS[provider] || provider}. Daftar model diambil dari API provider.${productNote}`;
 }
 
 /**
@@ -653,23 +902,272 @@ function updateProviderHint() {
  * menampilkan konfigurasi runtime tanpa mengekspos API key.
  */
 async function loadProviderCatalogs() {
-  const providerSelect = document.querySelector('#project-provider');
-  if (!providerSelect) {
-    return;
-  }
   const data = await requestJson('/ai/models', 'POST', {});
   for (const catalog of data.providers ?? []) {
     providerCatalogs.set(catalog.provider, catalog);
-    const option = providerSelect.querySelector(
-      `option[value="${catalog.provider}"]`,
-    );
-    if (option) {
-      option.textContent = `${option.textContent} · ${
-        catalog.configured ? 'siap' : 'belum dikonfigurasi'
-      }`;
-    }
   }
   updateProviderHint();
+}
+
+/**
+ * Keterangan: Mengambil katalog satu provider dari API resmi lewat backend.
+ * API key hanya dikirim ke server (tidak disimpan di sini); bila edit project,
+ * projectId memakai key terenkripsi di DB.
+ */
+async function fetchCatalogForProvider(provider, apiKey, projectId) {
+  const body = {
+    provider,
+    forceRefresh: Boolean(apiKey),
+  };
+  if (apiKey) {
+    body.apiKey = apiKey;
+  } else if (projectId) {
+    body.projectId = projectId;
+  }
+  const data = await requestJson('/ai/models', 'POST', body);
+  if (data?.provider === provider) {
+    return data;
+  }
+  return (data?.providers ?? []).find((item) => item.provider === provider);
+}
+
+/**
+ * Keterangan: Mengisi dropdown model dari katalog provider, tanpa daftar
+ * hardcoded. Model tersimpan yang belum ada di katalog tetap ditampilkan.
+ */
+function fillModelOptions(select, catalog, preferred) {
+  const list = [...(catalog?.models ?? [])];
+  if (preferred && !list.includes(preferred)) {
+    list.unshift(preferred);
+  }
+  select.replaceChildren();
+  if (list.length === 0) {
+    const empty = document.createElement('option');
+    empty.value = '';
+    empty.textContent = 'Model belum tersedia — isi API key';
+    select.append(empty);
+    return;
+  }
+  const selected =
+    (preferred && list.includes(preferred) && preferred) ||
+    (catalog?.defaultModel && list.includes(catalog.defaultModel)
+      ? catalog.defaultModel
+      : list[0]);
+  for (const modelId of list) {
+    const option = document.createElement('option');
+    option.value = modelId;
+    option.textContent = modelId;
+    option.selected = modelId === selected;
+    select.append(option);
+  }
+}
+
+/**
+ * Keterangan: Memuat ulang dropdown model satu baris dari endpoint provider,
+ * dengan spinner di label selama request.
+ */
+async function refreshRowModels(row, preferredModel) {
+  const select = row.querySelector('[name="defaultModel"]');
+  const spinner = row.querySelector('.model-spinner');
+  const provider = row.querySelector('[name="providerName"]').value;
+  const apiKey = row.querySelector('[name="apiKey"]').value.trim();
+  const projectId = document.querySelector('#project-form [name="projectId"]')?.value;
+  if (!select) {
+    return;
+  }
+  select.disabled = true;
+  if (spinner) {
+    spinner.hidden = false;
+  }
+  try {
+    const catalog = await fetchCatalogForProvider(provider, apiKey, projectId);
+    if (catalog) {
+      providerCatalogs.set(provider, catalog);
+    }
+    fillModelOptions(select, catalog, preferredModel ?? select.value);
+  } catch {
+    fillModelOptions(select, providerCatalogs.get(provider), preferredModel);
+  } finally {
+    select.disabled = false;
+    if (spinner) {
+      spinner.hidden = true;
+    }
+  }
+}
+
+/**
+ * Keterangan: Mengisi opsi select provider pada baris API key project.
+ */
+function fillProviderOptions(select, selected) {
+  select.replaceChildren();
+  for (const [value, label] of Object.entries(PROVIDER_LABELS)) {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = label;
+    option.selected = value === selected;
+    select.append(option);
+  }
+}
+
+/**
+ * Keterangan: Membuat satu baris provider + API key + dropdown model, plus
+ * checkbox Default. Key lama hanya ditampilkan ter-mask.
+ */
+function createProviderKeyRow(entry = {}) {
+  const row = document.createElement('article');
+  row.className = 'provider-key-row';
+  row.dataset.hasKey = entry.hasApiKey ? 'true' : 'false';
+
+  const fields = document.createElement('div');
+  fields.className = 'provider-key-fields';
+
+  const defaultLabel = document.createElement('label');
+  defaultLabel.className = 'default-provider-check';
+  defaultLabel.append('Default');
+  const defaultBox = document.createElement('input');
+  defaultBox.type = 'checkbox';
+  defaultBox.name = 'isDefault';
+  defaultBox.checked = Boolean(entry.isDefault);
+  defaultBox.addEventListener('change', () => {
+    if (defaultBox.checked) {
+      setExclusiveDefault(row);
+      return;
+    }
+    const anyChecked = [...document.querySelectorAll('#provider-key-list [name="isDefault"]')].some(
+      (box) => box.checked,
+    );
+    if (!anyChecked) {
+      defaultBox.checked = true;
+    }
+    updateProviderHint();
+  });
+  defaultLabel.append(defaultBox);
+
+  const providerLabel = document.createElement('label');
+  providerLabel.textContent = 'Provider';
+  const providerSelect = document.createElement('select');
+  providerSelect.name = 'providerName';
+  providerSelect.required = true;
+  fillProviderOptions(providerSelect, entry.provider || 'claude');
+  providerLabel.append(providerSelect);
+
+  const keyLabel = document.createElement('label');
+  keyLabel.textContent = 'API key';
+  const keyInput = document.createElement('input');
+  keyInput.name = 'apiKey';
+  keyInput.type = 'password';
+  keyInput.autocomplete = 'off';
+  keyInput.placeholder = entry.apiKeyMasked
+    ? `Tersimpan ${entry.apiKeyMasked} — kosongkan jika tidak diganti`
+    : 'sk-...';
+  keyLabel.append(keyInput);
+
+  const modelLabel = document.createElement('label');
+  const modelHeading = document.createElement('span');
+  modelHeading.className = 'model-label-row';
+  modelHeading.append('Model');
+  const modelSpinner = document.createElement('span');
+  modelSpinner.className = 'spinner spinner-small spinner-inline model-spinner';
+  modelSpinner.setAttribute('aria-hidden', 'true');
+  modelSpinner.hidden = true;
+  modelHeading.append(modelSpinner);
+  modelLabel.append(modelHeading);
+  const modelSelect = document.createElement('select');
+  modelSelect.name = 'defaultModel';
+  fillModelOptions(
+    modelSelect,
+    providerCatalogs.get(providerSelect.value),
+    entry.defaultModel ?? '',
+  );
+  modelLabel.append(modelSelect);
+
+  providerSelect.addEventListener('change', () => {
+    void refreshRowModels(row, '');
+    if (defaultBox.checked) {
+      updateProviderHint();
+    }
+  });
+  keyInput.addEventListener('blur', () => {
+    if (keyInput.value.trim()) {
+      void refreshRowModels(row, modelSelect.value);
+    }
+  });
+
+  const removeButton = document.createElement('button');
+  removeButton.type = 'button';
+  removeButton.className = 'icon-button danger-button';
+  removeButton.setAttribute('aria-label', 'Hapus provider');
+  removeButton.title = 'Hapus provider';
+  removeButton.append(createIconSvg(ICON_TRASH));
+  removeButton.addEventListener('click', () => {
+    const list = document.querySelector('#provider-key-list');
+    const rows = list.querySelectorAll('.provider-key-row');
+    if (rows.length <= 1) {
+      return;
+    }
+    const wasDefault = defaultBox.checked;
+    row.remove();
+    if (wasDefault) {
+      const first = list.querySelector('.provider-key-row');
+      if (first) {
+        setExclusiveDefault(first);
+      }
+    }
+  });
+
+  fields.append(defaultLabel, providerLabel, keyLabel, modelLabel, removeButton);
+  row.append(fields);
+  void refreshRowModels(row, entry.defaultModel ?? '');
+  return row;
+}
+
+/**
+ * Keterangan: Mengisi ulang daftar API key provider pada dialog project dan
+ * mencentang baris yang menjadi default.
+ */
+function renderProviderKeyRows(entries, defaultProvider) {
+  const list = document.querySelector('#provider-key-list');
+  if (!list) {
+    return;
+  }
+  list.replaceChildren();
+  const rows =
+    Array.isArray(entries) && entries.length > 0 ? entries : [{ provider: 'claude' }];
+  rows.forEach((entry, index) => {
+    const isDefault = defaultProvider
+      ? entry.provider === defaultProvider
+      : index === 0;
+    list.append(createProviderKeyRow({ ...entry, isDefault }));
+  });
+  if (!list.querySelector('[name="isDefault"]:checked')) {
+    const first = list.querySelector('.provider-key-row');
+    if (first) {
+      setExclusiveDefault(first);
+    }
+  }
+}
+
+/**
+ * Keterangan: Mengumpulkan payload providers dari baris form, tanpa mengirim
+ * API key kosong (edit = pertahankan key lama di server).
+ */
+function collectProjectProviders() {
+  return [...document.querySelectorAll('#provider-key-list .provider-key-row')].map(
+    (row) => {
+      const apiKey = row.querySelector('[name="apiKey"]').value.trim();
+      const defaultModel = row.querySelector('[name="defaultModel"]').value.trim();
+      const payload = {
+        provider: row.querySelector('[name="providerName"]').value,
+      };
+      if (apiKey) {
+        payload.apiKey = apiKey;
+      }
+      if (defaultModel) {
+        payload.defaultModel = defaultModel;
+      }
+      return payload;
+    },
+  );
 }
 
 /**
@@ -843,17 +1341,57 @@ function collectSteps() {
 }
 
 /**
- * Keterangan: Membuka form project dalam kondisi bersih untuk membuat data
- * baru dari dashboard.
+ * Keterangan: Membuka form project untuk mode create atau edit, lalu mengisi
+ * field dari data project yang sudah ada bila sedang mengedit.
  */
-function openProjectDialog() {
+function openProjectDialog(project = null) {
   const dialog = document.querySelector('#project-dialog');
   const form = document.querySelector('#project-form');
   form.reset();
   clearFormError(form);
+  form.elements.projectId.value = project?.id ?? '';
+  form.elements.name.value = project?.name ?? '';
+  form.elements.baseUrl.value = project?.baseUrl ?? '';
+  document.querySelector('#project-dialog-title').textContent = project
+    ? 'Edit Project'
+    : 'Buat Project';
+  renderProviderKeyRows(
+    Array.isArray(project?.providers) && project.providers.length > 0
+      ? project.providers
+      : [{ provider: 'claude' }],
+    project?.defaultProvider || 'claude',
+  );
   updateProviderHint();
   dialog.showModal();
   form.elements.name.focus();
+}
+
+/**
+ * Keterangan: Membuka dialog Instruction dan mengisi teks yang sudah disimpan
+ * di project, tanpa langsung generate.
+ */
+function openInstructionDialog(projectId) {
+  const dialog = document.querySelector('#instruction-dialog');
+  const form = document.querySelector('#instruction-form');
+  if (!dialog || !form) {
+    return;
+  }
+  const card = document.querySelector(
+    `.project-card[data-project-id="${projectId}"]`,
+  );
+  let project = {};
+  try {
+    project = JSON.parse(card?.dataset.project || '{}');
+  } catch {
+    project = {};
+  }
+  form.reset();
+  clearFormError(form);
+  form.elements.projectId.value = projectId;
+  form.elements.prompt.value = project.instruction ?? '';
+  form.elements.extraData.value = project.extraData ?? '';
+  dialog.showModal();
+  form.elements.prompt.focus();
 }
 
 /**
@@ -868,6 +1406,7 @@ function openTestCaseDialog(projectId, testCase = null) {
   form.elements.projectId.value = projectId;
   form.elements.testCaseId.value = testCase?.id ?? '';
   form.elements.title.value = testCase?.title ?? '';
+  form.elements.description.value = testCase?.description ?? '';
   form.elements.expected.value = Array.isArray(testCase?.expected)
     ? testCase.expected.join('\n')
     : '';
@@ -890,8 +1429,8 @@ function openTestCaseDialog(projectId, testCase = null) {
 }
 
 /**
- * Keterangan: Menyimpan project baru melalui API lalu memuat ulang dashboard
- * agar struktur project hasil server langsung tampil konsisten.
+ * Keterangan: Menyimpan project baru atau hasil edit melalui API, lalu memuat
+ * ulang dashboard agar data server langsung tampil konsisten.
  */
 async function submitProjectForm(event) {
   event.preventDefault();
@@ -899,22 +1438,90 @@ async function submitProjectForm(event) {
   if (!form.reportValidity()) {
     return;
   }
+  const projectId = form.elements.projectId.value;
+  const providers = collectProjectProviders();
+  const defaultProvider = getSelectedDefaultProvider();
+  const defaultRow = providers.find((entry) => entry.provider === defaultProvider);
+  if (!defaultProvider) {
+    showFormError(form, 'Centang Default pada salah satu provider.');
+    return;
+  }
+  if (!projectId && !defaultRow?.apiKey) {
+    showFormError(form, 'API key untuk provider default wajib diisi.');
+    return;
+  }
   const submitButton = form.querySelector('.submit-button');
   clearFormError(form);
   setSubmitButtonLoading(submitButton, true);
   try {
     const baseUrl = form.elements.baseUrl.value.trim();
-    await requestJson('/projects', 'POST', {
-      name: form.elements.name.value.trim(),
-      baseUrl: baseUrl || null,
-      defaultProvider: form.elements.defaultProvider.value,
-    });
+    await requestJson(
+      projectId ? `/projects/${projectId}` : '/projects',
+      projectId ? 'PATCH' : 'POST',
+      {
+        name: form.elements.name.value.trim(),
+        baseUrl: baseUrl || null,
+        defaultProvider,
+        providers,
+      },
+    );
     window.location.reload();
   } catch (error) {
     showFormError(
       form,
       error instanceof Error ? error.message : 'Project gagal disimpan',
     );
+    setSubmitButtonLoading(submitButton, false);
+  }
+}
+
+/**
+ * Keterangan: Menyimpan instruction ke project tanpa menjalankan generate.
+ */
+async function submitInstructionForm(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  if (!form.reportValidity()) {
+    return;
+  }
+  const projectId = form.elements.projectId.value;
+  const prompt = form.elements.prompt.value.trim();
+  const extraData = form.elements.extraData.value.trim();
+  if (!prompt) {
+    showFormError(form, 'Instruction wajib diisi.');
+    return;
+  }
+  const submitButton = form.querySelector('.submit-button');
+  const dialog = document.querySelector('#instruction-dialog');
+  clearFormError(form);
+  setSubmitButtonLoading(submitButton, true);
+  try {
+    const saved = await requestJson(`/projects/${projectId}/instruction`, 'POST', {
+      prompt,
+      extraData,
+    });
+    const card = document.querySelector(
+      `.project-card[data-project-id="${projectId}"]`,
+    );
+    if (card) {
+      try {
+        const project = JSON.parse(card.dataset.project || '{}');
+        card.dataset.project = JSON.stringify({
+          ...project,
+          instruction: saved.instruction ?? prompt,
+          extraData: saved.extraData ?? extraData,
+        });
+      } catch {
+        // Dataset gagal di-update; generate tetap membaca instruction dari server.
+      }
+    }
+    dialog?.close();
+  } catch (error) {
+    showFormError(
+      form,
+      error instanceof Error ? error.message : 'Instruction gagal disimpan',
+    );
+  } finally {
     setSubmitButtonLoading(submitButton, false);
   }
 }
@@ -951,6 +1558,7 @@ async function submitTestCaseForm(event) {
       testCaseId ? 'PATCH' : 'POST',
       {
         title: form.elements.title.value.trim(),
+        description: form.elements.description.value.trim(),
         steps: collectSteps(),
         expected,
       },
@@ -966,6 +1574,26 @@ async function submitTestCaseForm(event) {
 }
 
 /**
+ * Keterangan: Menghapus project setelah konfirmasi, dengan spinner pada
+ * tombol ikon selama request.
+ */
+async function deleteProject(button) {
+  const projectId = button.dataset.projectId;
+  const name = button.dataset.projectName || 'project ini';
+  if (!window.confirm(`Hapus project "${name}"? Test case dan hasil run ikut terhapus.`)) {
+    return;
+  }
+  setIconButtonLoading(button, true);
+  try {
+    await requestJson(`/projects/${projectId}/delete`, 'POST', {});
+    window.location.reload();
+  } catch (error) {
+    setIconButtonLoading(button, false);
+    window.alert(error instanceof Error ? error.message : 'Project gagal dihapus');
+  }
+}
+
+/**
  * Keterangan: Memasang seluruh event dialog CRUD dashboard satu kali setelah
  * token tersedia dan elemen halaman siap.
  */
@@ -977,26 +1605,62 @@ function initializeManagementUi() {
   }
   document
     .querySelector('#new-project-button')
-    .addEventListener('click', openProjectDialog);
-  document
-    .querySelector('#project-provider')
-    .addEventListener('change', updateProviderHint);
+    .addEventListener('click', () => openProjectDialog());
+  document.querySelectorAll('.edit-project-button').forEach((button) => {
+    button.addEventListener('click', () => {
+      const card = button.closest('.project-card');
+      try {
+        openProjectDialog(JSON.parse(card.dataset.project));
+      } catch {
+        openProjectDialog();
+        showFormError(
+          projectForm,
+          'Data project gagal dibaca. Muat ulang dashboard.',
+        );
+      }
+    });
+  });
+  document.querySelectorAll('.delete-project-button').forEach((button) => {
+    button.addEventListener('click', () => void deleteProject(button));
+  });
   document
     .querySelector('#add-step-button')
     .addEventListener('click', () => addStep({ action: 'goto' }));
+  document
+    .querySelector('#add-provider-key-button')
+    ?.addEventListener('click', () => {
+      const list = document.querySelector('#provider-key-list');
+      list?.append(createProviderKeyRow({ provider: 'openai' }));
+    });
   projectForm.addEventListener('submit', (event) => void submitProjectForm(event));
   testCaseForm.addEventListener('submit', (event) =>
     void submitTestCaseForm(event),
   );
+  document
+    .querySelector('#instruction-form')
+    ?.addEventListener('submit', (event) => void submitInstructionForm(event));
 
   document.querySelectorAll('[data-close-dialog]').forEach((button) => {
     button.addEventListener('click', () => button.closest('dialog').close());
   });
-  document.querySelectorAll('.add-test-case-button').forEach((button) => {
+  document.querySelectorAll('.instruction-button').forEach((button) => {
     button.addEventListener('click', () =>
-      openTestCaseDialog(button.dataset.projectId),
+      openInstructionDialog(button.dataset.projectId),
     );
   });
+  document.querySelectorAll('.generate-script-button').forEach((button) => {
+    button.addEventListener('click', (event) => startGenerateFromProject(event));
+  });
+  document
+    .querySelector('#manual-test-case-button')
+    ?.addEventListener('click', () => {
+      const instructionForm = document.querySelector('#instruction-form');
+      const projectId = instructionForm?.elements.projectId.value;
+      document.querySelector('#instruction-dialog')?.close();
+      if (projectId) {
+        openTestCaseDialog(projectId);
+      }
+    });
   document.querySelectorAll('.edit-test-case-button').forEach((button) => {
     button.addEventListener('click', () => {
       const article = button.closest('.test-case');
@@ -1017,6 +1681,155 @@ function initializeManagementUi() {
 }
 
 /**
+ * Keterangan: Mendekode payload JWT (tanpa verifikasi signature — hanya untuk
+ * menampilkan username milik user sendiri di navbar, bukan keputusan auth).
+ */
+function decodeJwtPayload(rawToken) {
+  try {
+    const payloadSegment = rawToken.split('.')[1];
+    const normalized = payloadSegment.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = normalized.padEnd(
+      normalized.length + ((4 - (normalized.length % 4)) % 4),
+      '=',
+    );
+    return JSON.parse(atob(padded));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Keterangan: Menampilkan username dari token pada tombol menu user di navbar.
+ */
+function renderUserIdentity() {
+  const nameEl = document.querySelector('#user-name');
+  const avatarEl = document.querySelector('#user-avatar');
+  if (!nameEl || !avatarEl || !token) {
+    return;
+  }
+  const payload = decodeJwtPayload(token);
+  const username = payload?.username || 'User';
+  nameEl.textContent = username;
+  avatarEl.textContent = username.slice(0, 2).toUpperCase();
+}
+
+/**
+ * Keterangan: Membuka/menutup dropdown menu user di navbar; dipakai juga
+ * untuk menutup otomatis saat klik di luar area menu atau tombol Escape.
+ */
+function setUserMenuOpen(isOpen) {
+  const menu = document.querySelector('#user-menu');
+  const button = document.querySelector('#user-menu-button');
+  if (!menu || !button) {
+    return;
+  }
+  menu.hidden = !isOpen;
+  button.setAttribute('aria-expanded', String(isOpen));
+}
+
+/**
+ * Keterangan: Memasang toggle dropdown user menu beserta penutup otomatis
+ * saat klik di luar area menu atau menekan Escape.
+ */
+function wireUserMenu() {
+  const button = document.querySelector('#user-menu-button');
+  const menu = document.querySelector('#user-menu');
+  if (!button || !menu) {
+    return;
+  }
+  button.addEventListener('click', (event) => {
+    event.stopPropagation();
+    setUserMenuOpen(menu.hidden);
+  });
+  document.addEventListener('click', (event) => {
+    if (!menu.hidden && !event.target.closest('.navbar-user')) {
+      setUserMenuOpen(false);
+    }
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      setUserMenuOpen(false);
+    }
+  });
+}
+
+/**
+ * Keterangan: Mengirim logout ke server (menghapus cookie auth), lalu
+ * membersihkan token lokal dan mengarahkan kembali ke halaman login.
+ */
+async function handleLogout() {
+  const button = document.querySelector('#logout-button');
+  if (!button || button.disabled) {
+    return;
+  }
+  setSubmitButtonLoading(button, true);
+  try {
+    await fetch('/auth/logout', {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+  } catch {
+    // Tetap lanjut logout di sisi client walau request gagal (mis. offline).
+  } finally {
+    sessionStorage.removeItem('pointestingToken');
+    window.location.replace('/dashboard/login');
+  }
+}
+
+/**
+ * Keterangan: Memfilter kartu project dan test case berdasarkan teks yang
+ * diketik pada kolom pencarian navbar, tanpa memanggil API (murni client-side).
+ */
+function filterDashboardEntries(rawQuery) {
+  const query = rawQuery.trim().toLowerCase();
+  const emptyState = document.querySelector('#search-empty-state');
+  let anyProjectVisible = false;
+
+  document.querySelectorAll('.project-card').forEach((card) => {
+    const projectName =
+      card.querySelector('.project-heading h2')?.textContent.toLowerCase() ?? '';
+    const projectMatches = query === '' || projectName.includes(query);
+    let anyTestCaseVisible = false;
+
+    card.querySelectorAll('.test-case').forEach((testCase) => {
+      const title = testCase.querySelector('h3')?.textContent.toLowerCase() ?? '';
+      const testCaseMatches = projectMatches || title.includes(query);
+      testCase.hidden = !testCaseMatches;
+      if (testCaseMatches) {
+        anyTestCaseVisible = true;
+      }
+    });
+
+    const cardVisible = projectMatches || anyTestCaseVisible;
+    card.hidden = !cardVisible;
+    if (cardVisible) {
+      anyProjectVisible = true;
+    }
+  });
+
+  if (emptyState) {
+    emptyState.hidden = query === '' || anyProjectVisible;
+  }
+}
+
+/**
+ * Keterangan: Memasang input pencarian navbar dengan debounce ringan agar
+ * filter tidak memicu reflow berlebihan pada setiap ketikan.
+ */
+function wireSearchFilter() {
+  const input = document.querySelector('#dashboard-search');
+  if (!input) {
+    return;
+  }
+  let debounceTimer;
+  input.addEventListener('input', () => {
+    clearTimeout(debounceTimer);
+    const value = input.value;
+    debounceTimer = setTimeout(() => filterDashboardEntries(value), 120);
+  });
+}
+
+/**
  * Keterangan: Menutup seluruh subscription ketika halaman ditinggalkan agar
  * subscriber gateway segera dibersihkan.
  */
@@ -1030,6 +1843,49 @@ function closeActiveSockets() {
 }
 
 /**
+ * Keterangan: Memulai job generate di halaman full-width: POST instruction
+ * tersimpan, lalu subscribe live log dan Playwright.
+ */
+async function initializeGenerateWorkspace() {
+  const workspace = document.querySelector('#generate-workspace');
+  const panel = workspace?.querySelector('.generate-panel');
+  const projectId = workspace?.dataset.projectId;
+  if (!workspace || !panel || !projectId) {
+    return;
+  }
+
+  renderUserIdentity();
+  wireUserMenu();
+  document.querySelector('#logout-button')?.addEventListener('click', () => {
+    void handleLogout();
+  });
+  document.querySelector('#page-loading').hidden = true;
+  document.querySelector('#dashboard-content').hidden = false;
+  panel.hidden = false;
+  resetGeneratePanel(panel);
+  appendGenerateLog(panel, 'Menunggu Playwright…', 'active');
+
+  try {
+    const data = await requestJson(
+      `/projects/${projectId}/generate/prompt`,
+      'POST',
+      {},
+    );
+    if (!data.generateId) {
+      throw new Error('Generate tidak mengembalikan generateId');
+    }
+    startGenerate(projectId, data.generateId);
+  } catch (error) {
+    updateStatus(panel, 'error');
+    appendGenerateLog(
+      panel,
+      error instanceof Error ? error.message : 'Test case gagal digenerate',
+      'error',
+    );
+  }
+}
+
+/**
  * Keterangan: Menginisialisasi dashboard, memuat katalog provider saat spinner
  * halaman aktif, lalu menampilkan seluruh fitur CRUD dan eksekusi.
  */
@@ -1038,7 +1894,17 @@ async function initializeDashboard() {
     window.location.replace('/dashboard/login');
     return;
   }
+  if (document.querySelector('#generate-workspace')) {
+    await initializeGenerateWorkspace();
+    return;
+  }
   initializeManagementUi();
+  renderUserIdentity();
+  wireUserMenu();
+  wireSearchFilter();
+  document.querySelector('#logout-button')?.addEventListener('click', () => {
+    void handleLogout();
+  });
   document.querySelectorAll('.run-button').forEach((button) => {
     button.addEventListener('click', () => void startRun(button));
   });

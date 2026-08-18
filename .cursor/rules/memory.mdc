@@ -1,37 +1,37 @@
 ---
-description: Baca dan update docs/memory.md untuk konteks lintas sesi
+description: Memory lintas sesi — sumber kebenaran docs/memory.md
 alwaysApply: true
 ---
 
-# Memory lintas sesi
+# Memory proyek
 
-## Awal setiap sesi percakapan
+Sumber lengkap: `docs/memory.md`. Itu **memory** sesi ini, bukan
+`PROJECT_STATUS.md` (status step) dan bukan `docs/instruction.md` (aturan kerja).
 
-1. Baca `docs/memory.md` **sebelum** mulai mengerjakan task.
-2. Pakai isinya sebagai konteks (keputusan, preferensi, progress, blocker).
-3. Jangan mengulang dari nol jika memory sudah menjelaskan status terkini.
+Di awal sesi: baca `docs/memory.md` **sebelum** mengerjakan apa pun.
+Pakai isinya (keputusan, preferensi, progress, blocker). Jangan mengulang dari nol.
 
-## Kapan harus update `docs/memory.md`
+## Snapshot (ringkas — detail di memory.md)
 
-Update memory bila ada salah satu:
+- Project: `ai-testing-tool` di repo `pointesting`; kode sejajar `docs/` (bukan subfolder).
+- Stack: Node.js + TypeScript strict, Fastify, `ws`, `pg`, `dotenv`, `zod`,
+  Playwright, EJS + HTMX, `yauzl`; package manager npm.
+- Fase 2 (AI Analyzer). Step 1–20 selesai; Fase 1 lulus E2E. Step berikutnya: 21.
+- Auth: JWT personal dari env, tanpa tabel user. Config lewat `src/config/env.ts`.
+- Queue in-memory `p-queue@6` (CommonJS). Artifact di `./storage/artifacts/<run_id>/`.
+
+## Kapan update `docs/memory.md`
+
 - Keputusan desain / arsitektur / preferensi user baru
 - Step selesai atau berubah status secara berarti
-- Blocker, workaround, atau catatan lingkungan (Node, DB, tools)
-- Perubahan lokasi struktur project atau konvensi kerja
-- User berpindah fokus/ide — catat fokus baru + apa yang ditunda
+- Blocker, workaround, atau catatan lingkungan
+- Perubahan struktur project atau konvensi kerja
+- User berpindah fokus — catat fokus baru + apa yang ditunda
 
 ## Cara update
 
-- Tulis ringkas di bagian yang relevan (Keputusan / Dikerjakan / Belum dikerjakan).
-- Tambah entri baru di **Log sesi** (terbaru di atas).
-- Jangan dump seluruh chat atau salin spesifikasi panjang.
-- Jangan catat rahasia: password, API key, token, data pribadi, kredensial production.
-- `PROJECT_STATUS.md` tetap sumber status step resmi; memory fokus ke konteks percakapan.
-
-## Bahasa & gaya kerja (dari preferensi user)
-
-- Balasan chat: bahasa Indonesia.
-- Keterangan singkat wajib untuk setiap fungsi baru.
-- Call API/AJAX: POST (kecuali yang sudah disepakati khusus, mis. health check).
-- UI + AJAX: selalu tampilkan spinner loading — di button jika aksi tombol,
-  di tengah halaman jika muat/refresh halaman.
+- Ringkas di Keputusan / Dikerjakan / Belum dikerjakan.
+- Entri baru di **Log sesi** (terbaru di atas).
+- Jangan dump chat atau salin spesifikasi. Pointer ke dokumen teknis sudah cukup.
+- Jangan catat rahasia (password, API key, token, NIK, kredensial production).
+- Status step resmi tetap di `docs/PROJECT_STATUS.md`.

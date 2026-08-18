@@ -14,14 +14,32 @@ import type {
 
 export type FetchImplementation = typeof fetch;
 
-const PROVIDER_TIMEOUT_MS = 30_000;
-const PROVIDER_MAX_ATTEMPTS = 2;
-const PROVIDER_RETRY_DELAY_MS = 250;
+const PROVIDER_TIMEOUT_MS = 45_000;
+const PROVIDER_MAX_ATTEMPTS = 3;
+const PROVIDER_RETRY_DELAY_MS = 800;
 const RAW_PROVIDER_RESPONSE = Symbol('rawProviderResponse');
+const PROVIDER_RESULT_LOG_LIMIT = 20_000;
 
 type AnalysisResultWithRawResponse = AnalysisResult & {
   [RAW_PROVIDER_RESPONSE]?: string;
 };
+
+/**
+ * Keterangan: Menulis response mentah provider AI ke stdout (terminal server)
+ * tanpa API key atau prompt, supaya hasil generate/analisis bisa ditelusuri.
+ */
+export function logProviderResult(
+  provider: ProviderName,
+  model: string,
+  result: string,
+): void {
+  const trimmed = result.trim();
+  const body =
+    trimmed.length > PROVIDER_RESULT_LOG_LIMIT
+      ? `${trimmed.slice(0, PROVIDER_RESULT_LOG_LIMIT)}\n… [dipotong ${trimmed.length - PROVIDER_RESULT_LOG_LIMIT} karakter]`
+      : trimmed;
+  console.log(`[ai] ${provider} model=${model}\n${body}`);
+}
 
 /**
  * Keterangan: Memastikan API key dan model tersedia saat provider benar-benar
@@ -51,9 +69,21 @@ async function waitBeforeProviderRetry(attempt: number): Promise<void> {
 }
 
 /**
+ * Keterangan: Mengecek apakah error fetch berasal dari AbortSignal.timeout
+ * (bukan koneksi putus) supaya pesan ke user lebih tepat sasaran.
+ */
+function isProviderTimeoutError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.name === 'TimeoutError' || error.name === 'AbortError')
+  );
+}
+
+/**
  * Keterangan: Melakukan POST JSON ke provider dengan timeout dan menormalkan
  * network/rate-limit/HTTP/JSON error menjadi ProviderError. Network, HTTP 429,
- * dan 5xx dicoba ulang satu kali dengan backoff sebelum fallback lintas vendor.
+ * dan 5xx dicoba ulang dengan backoff bertahap sebelum fallback lintas vendor
+ * (jaringan ke sebagian provider bisa lambat/tidak stabil).
  */
 export async function postProviderJson<T>(
   provider: ProviderName,
@@ -79,7 +109,10 @@ export async function postProviderJson<T>(
         await waitBeforeProviderRetry(attempt);
         continue;
       }
-      throw new ProviderError(provider, 'Request jaringan gagal', {
+      const message = isProviderTimeoutError(error)
+        ? `Request timeout setelah ${PROVIDER_TIMEOUT_MS / 1000} detik (percobaan ${PROVIDER_MAX_ATTEMPTS}x)`
+        : 'Request jaringan gagal';
+      throw new ProviderError(provider, message, {
         retryable: true,
         cause: error,
       });

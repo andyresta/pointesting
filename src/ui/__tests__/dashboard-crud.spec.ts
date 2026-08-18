@@ -27,7 +27,52 @@ function createDashboardFixture(): string {
         <div id="page-loading">Loading</div>
         <main id="dashboard-content" hidden>
           <button id="new-project-button" type="button">Buat Project</button>
-          <button class="add-test-case-button" data-project-id="project-1">Tambah Test Case</button>
+          <section
+            class="project-card"
+            data-project-id="project-1"
+            data-project='${JSON.stringify({
+              id: 'project-1',
+              name: 'Portal Internal',
+              baseUrl: 'https://portal.example.test',
+              defaultProvider: 'claude',
+              instruction: 'Uji login valid',
+              extraData: 'selector #email',
+              providers: [
+                {
+                  provider: 'claude',
+                  hasApiKey: true,
+                  apiKeyMasked: '••••test',
+                  defaultModel: null,
+                  sortOrder: 0,
+                },
+              ],
+            })}'
+          >
+            <button
+              class="icon-button edit-project-button"
+              type="button"
+              aria-label="Edit project"
+            ></button>
+            <button
+              class="icon-button delete-project-button"
+              type="button"
+              aria-label="Hapus project"
+              data-project-id="project-1"
+              data-project-name="Portal Internal"
+            ></button>
+            <button
+              class="secondary-button instruction-button"
+              data-project-id="project-1"
+            >Instruction</button>
+            <a
+              class="generate-script-button"
+              href="/dashboard/projects/project-1/generate"
+              data-project-id="project-1"
+            >
+              <span class="button-label">Generate Test Script</span>
+              <span class="spinner" hidden></span>
+            </a>
+          </section>
           <article
             class="test-case"
             data-project-id="project-1"
@@ -40,16 +85,31 @@ function createDashboardFixture(): string {
 
         <dialog id="project-dialog">
           <form id="project-form">
+            <input name="projectId" type="hidden" />
+            <h2 id="project-dialog-title"></h2>
             <input name="name" required />
             <input name="baseUrl" type="url" required />
-            <select id="project-provider" name="defaultProvider" required>
-              <option value="claude">Claude</option>
-              <option value="openai">OpenAI</option>
-            </select>
             <p id="provider-model-hint"></p>
+            <button id="add-provider-key-button" type="button">Tambah cadangan</button>
+            <div id="provider-key-list"></div>
             <p class="form-error" hidden></p>
             <button class="submit-button" type="submit">
               <span class="button-label">Simpan Project</span>
+              <span class="spinner" hidden></span>
+            </button>
+          </form>
+        </dialog>
+
+        <dialog id="instruction-dialog">
+          <form id="instruction-form">
+            <input name="projectId" type="hidden" />
+            <h2 id="instruction-dialog-title">Instruction</h2>
+            <textarea name="prompt" required></textarea>
+            <textarea name="extraData"></textarea>
+            <p class="form-error" hidden></p>
+            <button id="manual-test-case-button" type="button">Buat manual</button>
+            <button class="submit-button" type="submit">
+              <span class="button-label">Simpan Instruction</span>
               <span class="spinner" hidden></span>
             </button>
           </form>
@@ -61,6 +121,7 @@ function createDashboardFixture(): string {
             <input name="testCaseId" type="hidden" />
             <h2 id="test-case-dialog-title"></h2>
             <input name="title" required />
+            <textarea name="description"></textarea>
             <button id="add-step-button" type="button">Tambah Step</button>
             <div id="step-list"></div>
             <textarea name="expected" required></textarea>
@@ -90,26 +151,49 @@ async function prepareCrudPage(page: Page): Promise<void> {
     });
   });
   await page.route('http://dashboard.test/ai/models', async (route) => {
+    const catalogs = [
+      {
+        provider: 'claude',
+        defaultModel: 'claude-test',
+        models: ['claude-test'],
+        source: 'provider',
+        configured: true,
+      },
+      {
+        provider: 'openai',
+        defaultModel: 'openai-test',
+        models: ['openai-test'],
+        source: 'provider',
+        configured: false,
+      },
+      {
+        provider: 'opencode',
+        defaultModel: 'claude-sonnet-4-5',
+        models: ['claude-sonnet-4-5'],
+        source: 'provider',
+        configured: true,
+      },
+      {
+        provider: 'opencode-go',
+        defaultModel: 'gpt-5',
+        models: ['gpt-5'],
+        source: 'provider',
+        configured: true,
+      },
+    ];
+    const posted = route.request().postDataJSON() as { provider?: string } | null;
+    const payload = posted?.provider
+      ? (catalogs.find((item) => item.provider === posted.provider) ?? {
+          provider: posted.provider,
+          defaultModel: '',
+          models: [],
+          source: 'env_fallback',
+          configured: false,
+        })
+      : { providers: catalogs };
     await route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify({
-        providers: [
-          {
-            provider: 'claude',
-            defaultModel: 'claude-test',
-            models: ['claude-test'],
-            source: 'env_fallback',
-            configured: true,
-          },
-          {
-            provider: 'openai',
-            defaultModel: 'openai-test',
-            models: ['openai-test'],
-            source: 'env_fallback',
-            configured: false,
-          },
-        ],
-      }),
+      body: JSON.stringify(payload),
     });
   });
   await page.goto('http://dashboard.test/');
@@ -128,14 +212,16 @@ test('project dapat dibuat sepenuhnya dari dialog dashboard', async ({ page }) =
   });
 
   await page.getByRole('button', { name: 'Buat Project' }).click();
+  await expect(page.locator('#provider-key-list [name="defaultModel"]')).toHaveValue(
+    'claude-test',
+  );
+  await expect(page.locator('#provider-key-list [name="isDefault"]')).toBeChecked();
   await page.locator('#project-form [name="name"]').fill('Portal Internal');
   await page
     .locator('#project-form [name="baseUrl"]')
     .fill('https://portal.example.test');
-  await page
-    .locator('#project-form [name="defaultProvider"]')
-    .selectOption('claude');
-  await expect(page.locator('#provider-model-hint')).toContainText(
+  await page.locator('#provider-key-list [name="apiKey"]').fill('key-placeholder');
+  await expect(page.locator('#provider-key-list [name="defaultModel"]')).toHaveValue(
     'claude-test',
   );
 
@@ -145,11 +231,219 @@ test('project dapat dibuat sepenuhnya dari dialog dashboard', async ({ page }) =
   await page.locator('#project-form .submit-button').click();
   const request = await requestPromise;
 
-  expect(request.postDataJSON()).toEqual({
+  expect(request.postDataJSON()).toMatchObject({
     name: 'Portal Internal',
     baseUrl: 'https://portal.example.test',
     defaultProvider: 'claude',
+    providers: [
+      {
+        provider: 'claude',
+        apiKey: 'key-placeholder',
+        defaultModel: 'claude-test',
+      },
+    ],
   });
+});
+
+test('project lama dapat diedit termasuk pilih OpenCode Go', async ({ page }) => {
+  await prepareCrudPage(page);
+  await page.route('http://dashboard.test/projects/project-1', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ id: 'project-1' }),
+    });
+  });
+
+  await page.getByRole('button', { name: 'Edit project' }).click();
+  await expect(page.locator('#project-dialog-title')).toHaveText('Edit Project');
+  await expect(page.locator('#project-form [name="name"]')).toHaveValue(
+    'Portal Internal',
+  );
+  await page.getByRole('button', { name: 'Tambah cadangan' }).click();
+  const goRow = page.locator('#provider-key-list .provider-key-row').nth(1);
+  await goRow.locator('[name="providerName"]').selectOption('opencode-go');
+  await goRow.locator('[name="apiKey"]').fill('key-placeholder');
+  await goRow.locator('[name="isDefault"]').check();
+
+  const requestPromise = page.waitForRequest(
+    (request) =>
+      request.url().endsWith('/projects/project-1') &&
+      request.method() === 'PATCH',
+  );
+  await page.locator('#project-form .submit-button').click();
+  const request = await requestPromise;
+  const payload = request.postDataJSON();
+
+  expect(payload.name).toBe('Portal Internal');
+  expect(payload.baseUrl).toBe('https://portal.example.test');
+  expect(payload.defaultProvider).toBe('opencode-go');
+  expect(payload.providers).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ provider: 'claude' }),
+      expect.objectContaining({
+        provider: 'opencode-go',
+        apiKey: 'key-placeholder',
+      }),
+    ]),
+  );
+});
+
+test('project dapat dihapus dari ikon kartu', async ({ page }) => {
+  await prepareCrudPage(page);
+  await page.route('http://dashboard.test/projects/project-1/delete', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true }),
+    });
+  });
+  page.on('dialog', (dialog) => dialog.accept());
+
+  const requestPromise = page.waitForRequest(
+    (request) =>
+      request.url().endsWith('/projects/project-1/delete') &&
+      request.method() === 'POST',
+  );
+  await page.getByRole('button', { name: 'Hapus project' }).click();
+  await requestPromise;
+});
+
+test('instruction menyimpan prompt ke project tanpa generate', async ({ page }) => {
+  await prepareCrudPage(page);
+  await page.route(
+    'http://dashboard.test/projects/project-1/instruction',
+    async (route) => {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          instruction: 'Uji login valid',
+          extraData: 'selector #email',
+        }),
+      });
+    },
+  );
+
+  await page.getByRole('button', { name: 'Instruction' }).click();
+  await page.locator('#instruction-form [name="prompt"]').fill('Uji login valid');
+  await page
+    .locator('#instruction-form [name="extraData"]')
+    .fill('selector #email');
+
+  const requestPromise = page.waitForRequest(
+    (request) =>
+      request.url().endsWith('/projects/project-1/instruction') &&
+      request.method() === 'POST',
+  );
+  await page.locator('#instruction-form .submit-button').click();
+  const request = await requestPromise;
+
+  expect(request.postDataJSON()).toEqual({
+    prompt: 'Uji login valid',
+    extraData: 'selector #email',
+  });
+  await expect(page.locator('.generate-panel')).toBeHidden();
+});
+
+test('generate test script membuka halaman generate full-width', async ({ page }) => {
+  await prepareCrudPage(page);
+  await expect(
+    page.getByRole('link', { name: 'Generate Test Script' }),
+  ).toHaveAttribute('href', '/dashboard/projects/project-1/generate');
+});
+
+test('generate tanpa instruction menampilkan peringatan', async ({ page }) => {
+  await prepareCrudPage(page);
+  await page.locator('.project-card').evaluate((card) => {
+    const project = JSON.parse(card.getAttribute('data-project') || '{}');
+    project.instruction = '';
+    card.setAttribute('data-project', JSON.stringify(project));
+  });
+
+  const messages: string[] = [];
+  page.on('dialog', (dialog) => {
+    messages.push(dialog.message());
+    void dialog.accept();
+  });
+  await page
+    .getByRole('link', { name: 'Generate Test Script' })
+    .click({ noWaitAfter: true });
+  expect(messages.some((message) => message.includes('Instruction'))).toBe(
+    true,
+  );
+  await expect(page).toHaveURL('http://dashboard.test/');
+});
+
+/**
+ * Keterangan: Fixture halaman generate full-width untuk menguji boot job
+ * tanpa merender dashboard CRUD.
+ */
+function createGeneratePageFixture(): string {
+  return `<!doctype html>
+    <html lang="id">
+      <body class="generate-layout-page">
+        <div id="page-loading">Loading</div>
+        <div id="dashboard-content" class="generate-shell" hidden>
+          <span class="user-avatar" id="user-avatar"></span>
+          <span class="user-name" id="user-name"></span>
+          <button id="logout-button" type="button">
+            <span class="button-label">Logout</span>
+            <span class="spinner" hidden></span>
+          </button>
+          <main id="generate-workspace" data-project-id="project-1">
+            <section class="generate-panel">
+              <div class="run-panel-header">
+                <strong>Live generate</strong>
+                <span class="status-badge status-queued">queued</span>
+              </div>
+              <ol class="generate-log-list"></ol>
+              <div class="live-placeholder"></div>
+              <img class="live-frame" hidden />
+            </section>
+          </main>
+        </div>
+      </body>
+    </html>`;
+}
+
+test('halaman generate memulai job dari instruction tersimpan', async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    sessionStorage.setItem('pointestingToken', 'token-placeholder');
+  });
+  await page.route(
+    'http://dashboard.test/dashboard/projects/project-1/generate',
+    async (route) => {
+      await route.fulfill({
+        contentType: 'text/html',
+        body: createGeneratePageFixture(),
+      });
+    },
+  );
+  await page.route(
+    'http://dashboard.test/projects/project-1/generate/prompt',
+    async (route) => {
+      await route.fulfill({
+        status: 202,
+        contentType: 'application/json',
+        body: JSON.stringify({ generateId: 'gen-1', status: 'queued' }),
+      });
+    },
+  );
+
+  await page.goto('http://dashboard.test/dashboard/projects/project-1/generate');
+  const requestPromise = page.waitForRequest(
+    (request) =>
+      request.url().endsWith('/projects/project-1/generate/prompt') &&
+      request.method() === 'POST',
+  );
+  await page.addScriptTag({ path: DASHBOARD_SCRIPT });
+  const request = await requestPromise;
+
+  expect(request.postDataJSON()).toEqual({});
+  await expect(page.locator('#dashboard-content')).toBeVisible();
+  await expect(page.locator('.generate-log-list')).toContainText(
+    'Menunggu Playwright',
+  );
 });
 
 test('test case dapat dibuat dengan dynamic step builder', async ({ page }) => {
@@ -165,7 +459,8 @@ test('test case dapat dibuat dengan dynamic step builder', async ({ page }) => {
     },
   );
 
-  await page.getByRole('button', { name: 'Tambah Test Case' }).click();
+  await page.getByRole('button', { name: 'Instruction' }).click();
+  await page.getByRole('button', { name: 'Buat manual' }).click();
   await page.locator('#test-case-form [name="title"]').fill('Checkout produk');
   await page.locator('#step-list [name="url"]').fill('/products');
   await page.locator('#add-step-button').click();
@@ -186,6 +481,7 @@ test('test case dapat dibuat dengan dynamic step builder', async ({ page }) => {
 
   expect(request.postDataJSON()).toEqual({
     title: 'Checkout produk',
+    description: '',
     steps: [
       { action: 'goto', url: '/products' },
       { action: 'click', selector: '[data-testid="buy"]' },
@@ -205,7 +501,7 @@ test('test case lama dapat diedit dari builder tanpa JSON manual', async ({
     });
   });
 
-  await page.getByRole('button', { name: 'Edit' }).click();
+  await page.getByRole('button', { name: 'Edit', exact: true }).click();
   await expect(page.locator('#test-case-dialog-title')).toHaveText(
     'Edit Test Case',
   );
@@ -227,6 +523,7 @@ test('test case lama dapat diedit dari builder tanpa JSON manual', async ({
 
   expect(request.postDataJSON()).toEqual({
     title: 'Login berhasil',
+    description: '',
     steps: [
       { action: 'goto', url: '/login' },
       {

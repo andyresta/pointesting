@@ -11,6 +11,7 @@ import { registerWebSocketGateway } from '../ws/gateway';
 import { aiRoutes } from './routes/ai.routes';
 import { authRoutes } from './routes/auth.routes';
 import { dashboardRoutes } from './routes/dashboard.routes';
+import { generatorRoutes } from './routes/generator.routes';
 import { projectRoutes } from './routes/project.routes';
 import { testCaseRoutes } from './routes/testcase.routes';
 import { testRunRoutes } from './routes/testrun.routes';
@@ -18,11 +19,22 @@ import { testRunRoutes } from './routes/testrun.routes';
 /**
  * Keterangan: Membuat dan mengonfigurasi instance Fastify server — global
  * error handler, autentikasi JWT global (kecuali /health & /auth/login),
- * endpoint health check, dan seluruh route resource sesuai
+ * endpoint health check, gerbang `/` (redirect login/dashboard), dan seluruh route resource sesuai
  * docs/arsitektur-spesifikasi-teknis.md bagian "5. Spesifikasi API (REST)".
  */
 export function buildServer() {
-  const app = Fastify({ logger: true });
+  const app = Fastify({
+    logger: {
+      redact: {
+        paths: [
+          'req.headers.authorization',
+          'req.body.apiKey',
+          'req.body.providers[*].apiKey',
+        ],
+        censor: '***',
+      },
+    },
+  });
   const projectRoot = path.resolve(__dirname, '../..');
 
   registerErrorHandler(app);
@@ -49,6 +61,7 @@ export function buildServer() {
   app.register(testCaseRoutes);
   app.register(testRunRoutes);
   app.register(aiRoutes);
+  app.register(generatorRoutes);
   app.register(authRoutes);
   app.register(dashboardRoutes);
   registerWebSocketGateway(app);

@@ -15,8 +15,10 @@ export interface AuthTokenPayload {
  * Dicocokkan berdasarkan method + path (tanpa query string).
  */
 const PUBLIC_ROUTES: ReadonlyArray<{ method: string; path: string }> = [
+  { method: 'GET', path: '/' },
   { method: 'GET', path: '/health' },
   { method: 'POST', path: '/auth/login' },
+  { method: 'POST', path: '/auth/logout' },
   { method: 'GET', path: '/dashboard/login' },
 ];
 
@@ -68,6 +70,26 @@ function extractRequestToken(request: FastifyRequest): string | null {
 }
 
 /**
+ * Keterangan: Mengembalikan payload JWT bila token Bearer/cookie valid;
+ * selain itu null (tidak ada token atau token rusak/kedaluwarsa). Dipakai
+ * gerbang `/` yang me-redirect tanpa melempar 401.
+ */
+export function getValidAuthUser(
+  request: FastifyRequest,
+): AuthTokenPayload | null {
+  const token = extractRequestToken(request);
+  if (!token) {
+    return null;
+  }
+
+  try {
+    return verifyAuthToken(token);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Keterangan: Membuat JWT baru untuk username yang berhasil login, signed
  * dengan AUTH_SECRET, masa berlaku 7 hari sesuai spesifikasi.
  */
@@ -84,8 +106,9 @@ declare module 'fastify' {
 
 /**
  * Keterangan: Fastify preHandler hook global — memvalidasi JWT dari header
- * "Authorization: Bearer <token>" untuk semua route KECUALI /health dan
- * /auth/login. Melempar ApiError 401 kalau header tidak ada, format salah,
+ * "Authorization: Bearer <token>" untuk semua route KECUALI route publik
+ * (`/`, `/health`, `/auth/login`, `/dashboard/login`). Melempar ApiError 401
+ * kalau header tidak ada, format salah,
  * atau token invalid/kedaluwarsa. Payload yang valid disimpan di
  * request.authUser untuk dipakai handler berikutnya bila perlu.
  */

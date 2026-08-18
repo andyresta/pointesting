@@ -8,50 +8,157 @@
     <script src="/vendor/htmx/htmx.min.js" defer></script>
     <script src="/assets/dashboard.js" defer></script>
   </head>
-  <body hx-boost="true">
+  <body>
     <div id="page-loading" class="page-loading" aria-live="polite">
       <span class="spinner" aria-hidden="true"></span>
       <span>Memuat dashboard…</span>
     </div>
 
-    <main id="dashboard-content" class="container" hidden>
-      <header class="page-header">
-        <div>
-          <p class="eyebrow">Pointesting</p>
-          <h1>Test Dashboard</h1>
-          <p class="muted">Kelola project dan test case, jalankan browser, lalu lihat artifact serta analisis AI.</p>
+    <div id="dashboard-content" hidden>
+      <header class="navbar">
+        <div class="navbar-inner">
+          <a class="navbar-brand" href="/dashboard">
+            <span class="brand-mark" aria-hidden="true">P</span>
+            <span class="brand-name">Pointesting</span>
+          </a>
+
+          <nav class="navbar-nav" aria-label="Navigasi utama">
+            <a class="nav-link is-active" href="/dashboard">Dashboard</a>
+            <span class="nav-link nav-link-disabled" title="Segera hadir (Fase 3)">Test Generation</span>
+            <span class="nav-link nav-link-disabled" title="Segera hadir (Fase 4)">Self-Healing</span>
+            <span class="nav-link nav-link-disabled" title="Segera hadir (Fase 5)">Fixture</span>
+          </nav>
+
+          <div class="navbar-search">
+            <input
+              id="dashboard-search"
+              type="search"
+              placeholder="Cari project atau test case…"
+              aria-label="Cari project atau test case"
+              autocomplete="off"
+            />
+          </div>
+
+          <div class="navbar-user">
+            <button
+              id="user-menu-button"
+              class="user-menu-button"
+              type="button"
+              aria-haspopup="true"
+              aria-expanded="false"
+            >
+              <span class="user-avatar" id="user-avatar">··</span>
+              <span class="user-name" id="user-name">…</span>
+            </button>
+            <div class="user-menu" id="user-menu" hidden>
+              <button id="logout-button" class="user-menu-item" type="button">
+                <span class="button-label">Logout</span>
+                <span class="spinner spinner-small" aria-hidden="true" hidden></span>
+              </button>
+            </div>
+          </div>
         </div>
-        <button id="new-project-button" type="button">Buat Project</button>
       </header>
 
-      <% if (projects.length === 0) { %>
-        <section class="empty-state">
-          <h2>Belum ada project</h2>
-          <p class="muted">Klik “Buat Project” untuk memulai pengujian langsung dari UI.</p>
-        </section>
-      <% } %>
+      <main class="container">
+        <div class="page-toolbar">
+          <div>
+            <h1 class="page-title">Project &amp; Test Case</h1>
+            <p class="muted">Kelola project dan test case, jalankan browser, lalu lihat artifact serta analisis AI.</p>
+          </div>
+          <button id="new-project-button" type="button">Buat Project</button>
+        </div>
 
-      <% projects.forEach((project) => { %>
-        <section class="project-card" data-project-id="<%= project.id %>">
+        <p id="search-empty-state" class="search-empty-state muted" hidden>
+          Tidak ada project atau test case yang cocok dengan pencarian.
+        </p>
+
+        <% if (projects.length === 0) { %>
+          <section class="empty-state">
+            <h2>Belum ada project</h2>
+            <p class="muted">Klik “Buat Project”, simpan Instruction, lalu Generate Test Script.</p>
+          </section>
+        <% } %>
+
+        <div class="project-list">
+        <% projects.forEach((project) => { %>
+          <section
+            class="project-card"
+            data-project-id="<%= project.id %>"
+              data-project="<%= JSON.stringify({
+              id: project.id,
+              name: project.name,
+              baseUrl: project.baseUrl,
+              defaultProvider: project.defaultProvider,
+              instruction: project.instruction,
+              extraData: project.extraData,
+              providers: project.providers
+            }) %>"
+          >
           <div class="project-heading">
             <div>
               <h2><%= project.name %></h2>
               <% if (project.baseUrl) { %>
                 <p class="muted"><%= project.baseUrl %></p>
               <% } %>
+              <p class="muted project-provider">
+                Provider:
+                <%=
+                  project.defaultProvider === 'opencode' ? 'OpenCode Zen'
+                  : project.defaultProvider === 'opencode-go' ? 'OpenCode Go'
+                  : project.defaultProvider === 'openai' ? 'OpenAI'
+                  : project.defaultProvider === 'deepseek' ? 'DeepSeek'
+                  : project.defaultProvider === 'kimi' ? 'Kimi'
+                  : 'Claude'
+                %>
+              </p>
             </div>
             <div class="project-actions">
               <span class="count"><%= project.testCases.length %> test case</span>
               <button
-                class="secondary-button add-test-case-button"
+                class="icon-button edit-project-button"
+                type="button"
+                aria-label="Edit project"
+                title="Edit project"
+              >
+                <svg class="button-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M12 20h9" />
+                  <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+                </svg>
+              </button>
+              <button
+                class="icon-button danger-button delete-project-button"
+                type="button"
+                aria-label="Hapus project"
+                title="Hapus project"
+                data-project-id="<%= project.id %>"
+                data-project-name="<%= project.name %>"
+              >
+                <svg class="button-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M3 6h18" />
+                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+                  <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                </svg>
+                <span class="spinner spinner-small spinner-inline" aria-hidden="true" hidden></span>
+              </button>
+              <button
+                class="secondary-button instruction-button"
                 type="button"
                 data-project-id="<%= project.id %>"
-              >Tambah Test Case</button>
+              >Instruction</button>
+              <a
+                class="generate-script-button"
+                href="/dashboard/projects/<%= project.id %>/generate"
+                data-project-id="<%= project.id %>"
+              >
+                <span class="button-label">Generate Test Script</span>
+                <span class="spinner spinner-small" aria-hidden="true" hidden></span>
+              </a>
             </div>
           </div>
 
           <% if (project.testCases.length === 0) { %>
-            <p class="muted project-empty">Project ini belum memiliki test case.</p>
+            <p class="muted project-empty">Belum ada test case. Simpan Instruction, lalu klik Generate Test Script, atau buat manual dari dialog Instruction.</p>
           <% } %>
 
           <% project.testCases.forEach((testCase) => { %>
@@ -62,6 +169,7 @@
               data-test-case="<%= JSON.stringify({
                 id: testCase.id,
                 title: testCase.title,
+                description: testCase.description,
                 steps: testCase.steps,
                 expected: testCase.expected
               }) %>"
@@ -69,6 +177,9 @@
               <div class="test-case-row">
                 <div>
                   <h3><%= testCase.title %></h3>
+                  <% if (testCase.description) { %>
+                    <p class="test-case-description"><%= testCase.description %></p>
+                  <% } %>
                   <p class="muted"><%= Array.isArray(testCase.steps) ? testCase.steps.length : 0 %> langkah</p>
                   <div class="latest-analysis-summary" <%= testCase.latestAnalysisResult ? '' : 'hidden' %>>
                     <% if (testCase.latestAnalysisResult) { %>
@@ -107,16 +218,19 @@
               </section>
             </article>
           <% }); %>
-        </section>
-      <% }); %>
-    </main>
+          </section>
+        <% }); %>
+        </div>
+      </main>
+    </div>
 
     <dialog id="project-dialog" class="app-dialog">
       <form id="project-form" class="dialog-form" hx-boost="false">
+        <input name="projectId" type="hidden" />
         <div class="dialog-header">
           <div>
             <p class="eyebrow">Project</p>
-            <h2>Buat Project</h2>
+            <h2 id="project-dialog-title">Buat Project</h2>
           </div>
           <button class="icon-button" type="button" data-close-dialog aria-label="Tutup">×</button>
         </div>
@@ -125,7 +239,7 @@
           <input name="name" required maxlength="120" autocomplete="off" />
         </label>
         <label>
-          Base URL aplikasi (opsional)
+          Base URL aplikasi (wajib untuk Instruction / generate AI)
           <input
             name="baseUrl"
             type="url"
@@ -133,24 +247,71 @@
             autocomplete="url"
           />
         </label>
-        <label>
-          Default AI provider
-          <select name="defaultProvider" id="project-provider" required>
-            <option value="claude">Claude</option>
-            <option value="openai">OpenAI</option>
-            <option value="deepseek">DeepSeek</option>
-            <option value="kimi">Kimi</option>
-            <option value="opencode">OpenCode Zen</option>
-          </select>
-        </label>
-        <p id="provider-model-hint" class="field-hint">
-          Model runtime mengikuti konfigurasi environment provider.
-        </p>
+        <div class="form-section">
+          <div class="form-section-heading">
+            <div>
+              <h3>API key provider</h3>
+              <p id="provider-model-hint" class="field-hint">
+                Centang Default pada satu baris. Urutan baris = urutan fallback.
+              </p>
+            </div>
+            <button id="add-provider-key-button" class="secondary-button" type="button">
+              Tambah cadangan
+            </button>
+          </div>
+          <div id="provider-key-list" class="provider-key-list"></div>
+        </div>
         <p class="alert form-error" hidden></p>
         <div class="dialog-actions">
           <button class="secondary-button" type="button" data-close-dialog>Batal</button>
           <button class="submit-button" type="submit">
             <span class="button-label">Simpan Project</span>
+            <span class="spinner spinner-small" aria-hidden="true" hidden></span>
+          </button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="instruction-dialog" class="app-dialog">
+      <form id="instruction-form" class="dialog-form" hx-boost="false">
+        <input name="projectId" type="hidden" />
+        <div class="dialog-header">
+          <div>
+            <p class="eyebrow">Test Case</p>
+            <h2 id="instruction-dialog-title">Instruction</h2>
+          </div>
+          <button class="icon-button" type="button" data-close-dialog aria-label="Tutup">×</button>
+        </div>
+        <p class="field-hint">
+          Simpan instruction di project ini. Generate Test Script ada di kartu project: AI membuka Base URL, mengisi form sesuai instruction, lalu menyusun test case.
+        </p>
+        <label>
+          Instruction
+          <textarea
+            name="prompt"
+            required
+            rows="6"
+            maxlength="8000"
+            placeholder="Contoh: Uji login dengan kredensial valid, lalu pastikan dashboard tampil."
+          ></textarea>
+        </label>
+        <label>
+          Data tambahan (opsional)
+          <textarea
+            name="extraData"
+            rows="4"
+            maxlength="8000"
+            placeholder="Selector, dummy credential, catatan flow, cuplikan dokumen…"
+          ></textarea>
+        </label>
+        <p class="alert form-error" hidden></p>
+        <div class="dialog-actions">
+          <button class="secondary-button" type="button" data-close-dialog>Batal</button>
+          <button id="manual-test-case-button" class="secondary-button" type="button">
+            Buat manual
+          </button>
+          <button class="submit-button" type="submit">
+            <span class="button-label">Simpan Instruction</span>
             <span class="spinner spinner-small" aria-hidden="true" hidden></span>
           </button>
         </div>
@@ -171,6 +332,15 @@
         <label>
           Judul test case
           <input name="title" required maxlength="160" autocomplete="off" />
+        </label>
+        <label>
+          Keterangan
+          <textarea
+            name="description"
+            rows="3"
+            maxlength="2000"
+            placeholder="Ringkas tujuan uji, misalnya: memastikan login valid membuka dashboard."
+          ></textarea>
         </label>
         <div class="form-section">
           <div class="form-section-heading">

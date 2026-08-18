@@ -31,6 +31,7 @@ export async function testCaseRoutes(app: FastifyInstance): Promise<void> {
     const testCase = await testCaseRepository.create({
       projectId,
       title: body.title,
+      description: body.description?.trim() || null,
       steps: body.steps as JsonValue,
       expected: body.expected as JsonValue,
       source: body.source,
@@ -57,6 +58,8 @@ export async function testCaseRoutes(app: FastifyInstance): Promise<void> {
 
     const testCase = await testCaseRepository.update(id, {
       title: body.title,
+      description:
+        body.description === undefined ? undefined : body.description.trim() || null,
       steps: body.steps as JsonValue | undefined,
       expected: body.expected as JsonValue | undefined,
       source: body.source,

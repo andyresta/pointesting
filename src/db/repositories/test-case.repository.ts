@@ -1,3 +1,4 @@
+import type { PoolClient } from 'pg';
 import { pool } from '../client';
 import { buildUpdateQuery } from './query-utils';
 import type {
@@ -13,6 +14,7 @@ const TEST_CASE_COLUMNS = `
   id,
   project_id AS "projectId",
   title,
+  description,
   steps,
   expected,
   source,
@@ -81,14 +83,16 @@ export class TestCaseRepository {
    * Keterangan: Membuat test case baru beserta steps dan expected JSONB,
    * lalu mengembalikan row yang baru dibuat.
    */
-  async create(data: TestCaseCreateData): Promise<TestCase> {
-    const result = await pool.query<TestCase>(
-      `INSERT INTO test_case (project_id, title, steps, expected, source)
-       VALUES ($1, $2, $3, $4, $5)
+  async create(data: TestCaseCreateData, client?: PoolClient): Promise<TestCase> {
+    const db = client ?? pool;
+    const result = await db.query<TestCase>(
+      `INSERT INTO test_case (project_id, title, description, steps, expected, source)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING ${TEST_CASE_COLUMNS}`,
       [
         data.projectId,
         data.title,
+        data.description?.trim() || null,
         JSON.stringify(data.steps),
         JSON.stringify(data.expected),
         data.source === undefined ? 'manual' : data.source,
@@ -184,6 +188,7 @@ export class TestCaseRepository {
       {
         projectId: 'project_id',
         title: 'title',
+        description: 'description',
         steps: 'steps',
         expected: 'expected',
         source: 'source',

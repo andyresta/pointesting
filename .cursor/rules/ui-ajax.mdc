@@ -1,0 +1,16 @@
+---
+description: Spinner loading wajib untuk setiap UI + AJAX
+globs: "src/ui/**/*"
+alwaysApply: false
+---
+
+# UI + AJAX — spinner wajib
+
+Setiap call AJAX / request async wajib menampilkan spinner loading.
+
+- Aksi tombol (submit, simpan, run, login): spinner **di dalam button**; button disable selama proses.
+- Muat / refresh halaman atau area konten utama: spinner **di tengah halaman** (atau tengah area konten) sampai data siap.
+- Sembunyikan spinner dan kembalikan state normal di `finally` (sukses maupun gagal).
+- Jangan double-submit: selama spinner aktif, cegah klik ulang pada aksi yang sama.
+- Request paralel: spinner halaman tetap tampil sampai semua request kritis selesai (atau spinner per-section).
+- Pastikan desktop + mobile. Jangan layout generik berlebihan; satu tujuan per section.

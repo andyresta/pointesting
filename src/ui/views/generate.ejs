@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Generate Test Script — Pointesting</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+    <script src="/assets/dashboard.js" defer></script>
+  </head>
+  <body class="generate-layout-page">
+    <div id="page-loading" class="page-loading" aria-live="polite">
+      <span class="spinner" aria-hidden="true"></span>
+      <span>Memuat generate test script…</span>
+    </div>
+
+    <div id="dashboard-content" class="generate-shell" hidden>
+      <header class="navbar">
+        <div class="navbar-inner navbar-inner-wide">
+          <a class="navbar-brand" href="/dashboard">
+            <span class="brand-mark" aria-hidden="true">P</span>
+            <span class="brand-name">Pointesting</span>
+          </a>
+
+          <nav class="navbar-nav" aria-label="Navigasi utama">
+            <a class="nav-link" href="/dashboard">Dashboard</a>
+            <span class="nav-link is-active">Generate Test Script</span>
+            <span class="nav-link nav-link-disabled" title="Segera hadir (Fase 4)">Self-Healing</span>
+            <span class="nav-link nav-link-disabled" title="Segera hadir (Fase 5)">Fixture</span>
+          </nav>
+
+          <div class="navbar-user">
+            <button
+              id="user-menu-button"
+              class="user-menu-button"
+              type="button"
+              aria-haspopup="true"
+              aria-expanded="false"
+            >
+              <span class="user-avatar" id="user-avatar">··</span>
+              <span class="user-name" id="user-name">…</span>
+            </button>
+            <div class="user-menu" id="user-menu" hidden>
+              <button id="logout-button" class="user-menu-item" type="button">
+                <span class="button-label">Logout</span>
+                <span class="spinner spinner-small" aria-hidden="true" hidden></span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main
+        id="generate-workspace"
+        class="generate-page-main"
+        data-project-id="<%= project.id %>"
+      >
+        <div class="generate-toolbar">
+          <div class="generate-toolbar-heading">
+            <h1 class="page-title"><%= project.name %></h1>
+            <% if (project.baseUrl) { %>
+              <span class="muted"><%= project.baseUrl %></span>
+            <% } %>
+          </div>
+          <a class="secondary-button" href="/dashboard">Kembali ke Dashboard</a>
+        </div>
+
+        <section class="generate-panel generate-panel-page" aria-live="polite">
+          <div class="run-panel-header">
+            <strong>Live generate</strong>
+            <span class="status-badge status-queued">queued</span>
+          </div>
+          <div class="generate-layout">
+            <aside class="generate-log">
+              <ol class="generate-log-list"></ol>
+            </aside>
+            <div class="generate-view">
+              <div class="live-placeholder">Menunggu tampilan Playwright…</div>
+              <img class="live-frame" alt="Live Playwright view" hidden />
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>

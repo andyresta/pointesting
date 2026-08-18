@@ -10,15 +10,22 @@ export interface ScreencastController {
   stop(): Promise<void>;
 }
 
+export interface ScreencastOptions {
+  maxWidth?: number;
+  maxHeight?: number;
+  quality?: number;
+}
+
 /**
  * Keterangan: Memulai screencast Chromium melalui CDP karena Playwright yang
  * terpasang belum mengekspos `page.screencast` pada API publik/types. Frame
- * JPEG diperkecil (maks. 640x360, quality 50) lalu dibroadcast hanya ke
- * subscriber run terkait. Setiap frame langsung di-ack agar CDP lanjut kirim.
+ * JPEG diperkecil lalu dibroadcast hanya ke subscriber run terkait. Setiap
+ * frame langsung di-ack agar CDP lanjut kirim.
  */
 export async function startScreencast(
   page: Page,
   runId: string,
+  options: ScreencastOptions = {},
 ): Promise<ScreencastController> {
   const client: CDPSession = await page.context().newCDPSession(page);
   let stopped = false;
@@ -38,9 +45,9 @@ export async function startScreencast(
 
   await client.send('Page.startScreencast', {
     format: 'jpeg',
-    quality: 50,
-    maxWidth: 640,
-    maxHeight: 360,
+    quality: options.quality ?? 50,
+    maxWidth: options.maxWidth ?? 640,
+    maxHeight: options.maxHeight ?? 360,
     everyNthFrame: 1,
   });
 

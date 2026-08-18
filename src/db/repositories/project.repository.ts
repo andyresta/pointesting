@@ -1,3 +1,4 @@
+import type { PoolClient } from 'pg';
 import { pool } from '../client';
 import { buildUpdateQuery } from './query-utils';
 import type {
@@ -11,6 +12,8 @@ const PROJECT_COLUMNS = `
   name,
   base_url AS "baseUrl",
   default_provider AS "defaultProvider",
+  instruction,
+  extra_data AS "extraData",
   created_at AS "createdAt"
 `;
 
@@ -23,8 +26,9 @@ export class ProjectRepository {
   /**
    * Keterangan: Membuat project baru dan mengembalikan row yang baru dibuat.
    */
-  async create(data: ProjectCreateData): Promise<Project> {
-    const result = await pool.query<Project>(
+  async create(data: ProjectCreateData, client?: PoolClient): Promise<Project> {
+    const db = client ?? pool;
+    const result = await db.query<Project>(
       `INSERT INTO project (name, base_url, default_provider)
        VALUES ($1, $2, $3)
        RETURNING ${PROJECT_COLUMNS}`,
@@ -79,15 +83,22 @@ export class ProjectRepository {
    * Keterangan: Memperbarui sebagian field project menggunakan kolom whitelist,
    * lalu mengembalikan row terbaru atau null jika UUID tidak ditemukan.
    */
-  async update(id: string, data: ProjectUpdateData): Promise<Project | null> {
+  async update(
+    id: string,
+    data: ProjectUpdateData,
+    client?: PoolClient,
+  ): Promise<Project | null> {
+    const db = client ?? pool;
     const query = buildUpdateQuery(data, {
       name: 'name',
       baseUrl: 'base_url',
       defaultProvider: 'default_provider',
+      instruction: 'instruction',
+      extraData: 'extra_data',
     });
     query.values.push(id);
 
-    const result = await pool.query<Project>(
+    const result = await db.query<Project>(
       `UPDATE project
        SET ${query.setClause}
        WHERE id = $${query.values.length}
@@ -96,6 +107,15 @@ export class ProjectRepository {
     );
 
     return result.rows[0] ?? null;
+  }
+
+  /**
+   * Keterangan: Menghapus project beserta data terkait (ON DELETE CASCADE).
+   * Mengembalikan true jika row terhapus.
+   */
+  async delete(id: string): Promise<boolean> {
+    const result = await pool.query('DELETE FROM project WHERE id = $1', [id]);
+    return (result.rowCount ?? 0) > 0;
   }
 }
 

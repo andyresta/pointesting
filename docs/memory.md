@@ -56,8 +56,9 @@ Dokumen ini menyimpan **konteks percakapan lintas sesi**. Dibaca di awal setiap 
 - Login berhasil → JWT signed `AUTH_SECRET`, masa berlaku 7 hari. Dikirim via
   header `Authorization: Bearer <token>`; login dashboard juga menyetel cookie
   HttpOnly SameSite=Strict agar route halaman/video dapat diautentikasi browser.
-- Semua route data wajib JWT. Public: `GET /health`, `POST /auth/login`,
-  `GET /dashboard/login`, serta asset statis dashboard.
+- Semua route data wajib JWT. Public: `GET /`, `GET /health`, `POST /auth/login`,
+  `GET /dashboard/login`, serta asset statis dashboard. `GET /` me-redirect:
+  JWT valid (cookie/Bearer) → `/dashboard`; selain itu → `/dashboard/login`.
 - `bcrypt` (native, pakai prebuilt binary — tidak perlu compile) dan `jsonwebtoken` dipakai untuk hashing & JWT.
 - Tiap provider AI di env sekarang juga punya `*_MODEL` (default aktif) dan `*_MODELS` (daftar pilihan, CSV) selain `*_API_KEY` — di-expose sebagai `config.providers.<nama>` yang sudah dirapikan (apiKey/defaultModel/availableModels).
 - In-memory queue pakai `p-queue@6.6.2` (BUKAN versi terbaru) — p-queue v7+ ESM-only, sedangkan project ini `"type": "commonjs"`. Kalau mau upgrade p-queue nanti, harus pindah project ke ESM dulu atau pakai dynamic import.
@@ -83,12 +84,12 @@ Dokumen ini menyimpan **konteks percakapan lintas sesi**. Dibaca di awal setiap 
   pada implementasi provider adapter Step 16.
 - OpenCode Go (`https://opencode.ai/zen/go/v1`, subscription $10/bulan, katalog
   curated) adalah produk TERPISAH dari OpenCode Zen (pay-as-you-go, katalog
-  lengkap ~60 model) walau satu `OPENCODE_API_KEY` bisa dipakai untuk keduanya
-  (Go butuh entitlement subscription tambahan). Aplikasi ini baru dukung Zen;
-  pemisahan jadi provider `opencode-zen`/`opencode-go` belum diimplementasikan
-  (baru dibahas, tunggu keputusan/permintaan eksplisit).
-- `src/runner/executor.ts` (`executeTestRun`) — satu-satunya pemanggil nyata
-  `chromium.launch()` di luar unit test; video via `context` option
+  lengkap). Satu `OPENCODE_API_KEY` env masih cadangan terakhir; sumber utama
+  sekarang tabel `project_provider` (API key diisi saat create/edit project).
+  Pilih per project: `opencode` = Zen, `opencode-go` = Go.
+- `src/runner/executor.ts` (`executeTestRun`) dan `src/generator/page-explorer.ts`
+  (generate test case) memanggil `chromium.launch()` di luar unit test;
+  video via `context` option
   `recordVideo: { dir }`, trace via `context.tracing.start/stop({ path })`.
   Video baru final setelah `context.close()`; browser SELALU ditutup di
   `finally` (guard `context`/`browser` bisa `undefined` agar tidak double-close).
@@ -352,6 +353,216 @@ Dokumen ini menyimpan **konteks percakapan lintas sesi**. Dibaca di awal setiap 
 ---
 
 ## Log sesi (append-only, terbaru di atas)
+
+### 2026-08-18 — Layout generate dibuat scrollable + header ringkas
+- Bug: halaman generate tidak bisa discroll (viewport dipaksa `height:100vh;
+  overflow:hidden`) dan header (eyebrow+title+url) terlalu tinggi.
+- Fix: `.generate-layout-page`/`.generate-shell` sekarang `min-height:100vh`
+  (boleh scroll natural bila konten lebih tinggi dari viewport). Toolbar
+  eyebrow dihapus (redundan dengan nav-link aktif), title+url jadi 1 baris
+  (`generate-toolbar-heading`, align-items:baseline), padding dipepetkan.
+  Panel tetap kartu bermargin (dari task sebelumnya), sekarang `min-height:70vh`
+  (bukan height:100% kaku).
+
+### 2026-08-18 — Eksplorasi multi-halaman sebelum generate (comprehensive)
+- Keputusan (eksplisit user, override keputusan sebelumnya yang menolak ini):
+  AI sekarang menjelajahi menu navigasi utama (bukan hanya halaman
+  pasca-login) sebelum generate test case, supaya cakupan lebih komprehensif.
+- Scope disepakati via pertanyaan terstruktur: (1) ikuti item menu navigasi
+  atas saja, max **6 halaman** (bukan crawl tanpa batas/manual list); (2)
+  snapshot halaman tambahan **ringkas saja** (judul+heading+label tombol,
+  TANPA id/selector/letak) supaya prompt tidak membengkak (payload besar
+  sudah jadi penyebab timeout sebelumnya); (3) tetap **1x panggilan LLM
+  final** (bukan 1 panggilan per halaman) yang menerima konteks gabungan.
+- Implementasi murni Playwright (tanpa LLM call tambahan) di
+  `page-explorer.ts`: `extractTopNavLinks` (kandidat `<a href>` di y≤140px,
+  exclude hash/javascript/mailto, logout/hapus/delete, beda origin, URL
+  sama), `crawlAdditionalPages` (goto tiap kandidat, timeout 10s per halaman,
+  skip yang gagal, balik ke URL semula di akhir), `summarizePageForPrompt`,
+  `formatPageSummariesForPrompt`.
+- `generator.service.ts`: `LiveExplorationContext.crawlAdditionalPages`
+  dipanggil sekali setelah instruction (baik ada langkah maupun tidak),
+  hasil disiarkan ke panel log (`AI sedang menjelajahi halaman "..."`).
+  `additionalPages` masuk ke prompt final via `buildGenerationUserPrompt`.
+- System prompt generate: boleh bikin test case navigasi (goto+waitFor) ke
+  halaman ringkasan itu, TAPI dilarang fill/click di sana (tidak ada
+  selector-nya) — mencegah LLM mengarang selector untuk halaman yang cuma
+  diringkas.
+- Constants: `MAX_ADDITIONAL_PAGES = 6` di `generator.service.ts`.
+- Test baru: `page-explorer.spec.ts` (extractTopNavLinks/summarize/format),
+  `prompt-generation.spec.ts` (crawl terpanggil, ringkasan masuk prompt).
+
+### 2026-08-18 — Resiliency panggilan provider AI (timeout/jaringan)
+- Blocker ditemukan: generate berhenti total setelah login karena panggilan
+  LLM kedua (`generate test case`) timeout ke `opencode-go` — koneksi ke
+  `opencode.ai` dari server ini terukur tidak stabil (0,9s–12,6s untuk
+  request ringan yang sama). Karena project hanya punya 1 provider
+  terkonfigurasi, tidak ada fallback saat itu gagal.
+- Keputusan (eksplisit user): perbaiki resiliency saja, TIDAK menambah
+  eksplorasi multi-halaman setelah login (itu di luar scope saat ini).
+- `provider-utils.ts` (`postProviderJson`, dipakai semua provider):
+  timeout 30s→45s, max attempt 2→3, backoff 250ms→800ms per attempt.
+  Pesan error kini beda antara timeout (`Request timeout setelah 45 detik…`)
+  dan koneksi putus (`Request jaringan gagal`).
+- Catatan: desain generate tetap 1 siklus (analisis awal → jalankan
+  instruction sekali → snapshot ulang sekali → generate) — TIDAK crawl
+  menu/halaman lain setelah login. Kalau user mau itu nanti, perlu task baru.
+
+### 2026-08-18 — Generate Test Script di halaman full-width
+- Keputusan (eksplisit user): panel generate tidak lagi di dalam kartu
+  project (terbatas `.container` 1280px). Tombol **Generate Test Script**
+  membuka halaman baru `GET /dashboard/projects/:id/generate`.
+- Halaman full viewport: navbar lebar, kiri log, kanan Playwright.
+  Instruction kosong → alert di dashboard / redirect server ke `/dashboard`.
+- Job auto-start saat halaman dimuat (`POST /projects/:id/generate/prompt`
+  body `{}`). Selesai → kembali ke dashboard. ExtraData tidak di-render HTML.
+
+### 2026-08-18 — Instruction hanya simpan; generate di kartu project
+- Keputusan (eksplisit user): modal Instruction hanya menyimpan teks
+  (prompt + extraData) ke project. Tombol **Generate Test Script** ada di
+  panel kartu project, memakai instruction tersimpan.
+- `POST /projects/:id/instruction`; generate body prompt opsional (fallback
+  kolom `project.instruction` / `extra_data`, migration 004).
+
+### 2026-08-18 — Result provider AI ke console server
+- Keputusan (eksplisit user): setiap response LLM (generate + analyzer)
+  ditulis ke stdout terminal (`[ai] <provider> model=...` + isi result).
+- Prompt, API key, dan extraData tidak dilog. Error provider ke stderr
+  dengan prefix yang sama. Wrapper di `createLLMClient`.
+
+### 2026-08-18 — Generate live: isi instruction + panel light full width
+- Keputusan (eksplisit user): panel generate tidak gelap; menyesuaikan tema
+  light dashboard, dan lebar mengikuti container. Playwright tidak boleh diam
+  di halaman login — harus mengisi form sesuai instruction/data tambahan.
+- Alur live: buka halaman → analisis → LLM langkah singkat → `executeSteps`
+  (fill/click terlihat di screencast) → analisis ulang → generate test case.
+- Screencast generate 1280x720. Nilai isian tidak ditulis di log panel.
+
+### 2026-08-18 — Live panel generate (kiri log, kanan Playwright)
+- Keputusan (eksplisit user): saat Instruction/generate, dashboard menampilkan
+  panel split — kiri progres AI (“sedang menganalisis…”, “sedang generate…”),
+  kanan tampilan Playwright (screencast JPEG, sama seperti live run).
+- `POST /projects/:id/generate/prompt` sekarang 202 `{ generateId, status }`
+  lalu job di `testRunQueue`. WS reuse `subscribe:run` + `run:frame`; event
+  baru `generate:status` / `generate:done` / `generate:error`.
+- Browser tetap terbuka selama LLM. Test case hasil generate wajib punya
+  `description` (keterangan 1–2 kalimat), kolom baru di `test_case`
+  (migration 003). Kartu dashboard menampilkan keterangan itu.
+- File: `page-explorer.ts`, `generator.service.ts`, `queue.ts`, `events.ts`,
+  dashboard EJS/JS/CSS.
+
+### 2026-08-18 — Generate AI wajib analisis tampilan halaman
+- Keputusan (eksplisit user): test case hasil Instruction tidak boleh
+  mengarang selector. Playwright membuka Base URL project, memetakan
+  tombol/input (id, name, data-testid, teks, letak x/y), lalu LLM wajib
+  memakai selector dari snapshot itu.
+- Base URL kosong → 400. Halaman gagal dibuka → 502, generate dibatalkan
+  (tidak fallback ke tebakan). MCP Step 23 masih belum; pakai Chromium
+  yang sudah ada di runner.
+- File: `src/generator/page-explorer.ts`.
+
+### 2026-08-18 — Instruction mengganti Tambah Test Case (generate via AI)
+- Keputusan (eksplisit user): tombol "Tambah Test Case" diganti **Instruction**.
+  Default test case disusun AI dari prompt (+ data tambahan opsional).
+  User tetap bisa edit hasilnya, atau "Buat manual" dari dialog yang sama.
+- `POST /projects/:id/generate/prompt` memakai LLMClient project (fallback
+  provider sama seperti analyzer). MCP explore (Step 23) dan tabel draft
+  belum dipakai — hasil langsung insert `test_case` `source=ai_prompt`.
+- File: `src/generator/prompt-generation.ts`, `generator.service.ts`,
+  `src/api/routes/generator.routes.ts`.
+
+### 2026-08-18 — Default provider via checklist + ikon edit/hapus
+- Keputusan (eksplisit user): dropdown "Default AI provider" dihapus karena
+  ambigu. Default dipilih lewat checkbox di baris API key provider (satu
+  yang boleh aktif). `defaultProvider` tetap dikirim ke API dari baris
+  yang dicentang.
+- Kartu project: Edit dan Hapus memakai ikon (bukan teks). Hapus lewat
+  `POST /projects/:id/delete` setelah konfirmasi; CASCADE di schema
+  menghapus data terkait.
+
+### 2026-08-18 — Dropdown model dari katalog provider (tanpa hardcode)
+- Keputusan: daftar model di form project diambil live dari API provider
+  lewat `POST /ai/models` (bukan input teks / daftar hardcoded di UI).
+  `*_MODELS` env tetap fallback bila endpoint gagal atau key kosong.
+- `POST /ai/models` menerima `provider` + `apiKey` (key baru di form) atau
+  `projectId` (pakai key terenkripsi di `project_provider`).
+- UI: `<select name="defaultModel">` per baris provider; spinner kecil saat
+  fetch. Model tersimpan yang belum ada di katalog tetap ditampilkan.
+
+### 2026-08-18 — API key per project (tabel terpisah + fallback)
+- Keputusan (eksplisit user): API key tidak lagi hanya dari `.env`. User
+  mengisi key saat create/edit project. Tabel baru `project_provider`
+  (satu project, banyak provider). Default provider dicoba dulu, baris lain
+  jadi fallback; `.env` tetap cadangan terakhir jika project belum punya key.
+- Keamanan: key di-encrypt AES-256-GCM (`AUTH_SECRET`) di `api_key_cipher`.
+  API/UI hanya mengembalikan mask (`••••abcd`), tidak pernah plaintext.
+  Fastify logger meredact `req.body.providers[*].apiKey`.
+- Dikerjakan: migration `002_project_provider.sql`, repository, factory
+  analyzer per-key, form multi-baris "Tambah cadangan", PATCH/POST project
+  menerima `providers[]`.
+
+### 2026-08-18 — Header compact, edit project, OpenCode Zen vs Go
+- UI: hapus eyebrow "Pointesting" di toolbar; judul "Project & Test Case"
+  diperkecil (`.page-title` 1.15rem). Kartu project menampilkan provider aktif
+  dan tombol **Edit Project**.
+- API: `PATCH /projects/:id` (edit name/baseUrl/defaultProvider); validasi
+  defaultProvider terhadap `PROVIDER_NAMES`.
+- Keputusan OpenCode (eksplisit user): **satu API key** (`OPENCODE_API_KEY`)
+  untuk Zen dan Go; produk dipilih sendiri di form project (`opencode` vs
+  `opencode-go`). Go butuh subscription; katalog/runtime base URL berbeda.
+- Dikerjakan: provider `opencode-go` di env/katalog/analyzer/adapter; env
+  opsional `OPENCODE_GO_MODEL`/`OPENCODE_GO_MODELS`. `.env.example` dikosongkan
+  dari nilai API key nyata (jangan simpan rahasia di example).
+
+### 2026-08-18 — Fix: klik link navbar bikin dashboard stuck loading
+- Bug: `<body hx-boost="true">` (dashboard.ejs & login.ejs) bikin htmx
+  intercept klik `<a>` navbar jadi AJAX swap body, lalu `dashboard.js`
+  (script classic, top-level `const`/`let`) tereksekusi ulang setelah swap →
+  `SyntaxError: Identifier ... already declared`; `initializeDashboard()`
+  gagal jalan lagi → `#page-loading` nyangkut selamanya ("memuat terus").
+- Keputusan: hapus `hx-boost="true"` dari `<body>` — app ini tidak pakai
+  fitur htmx lain (tidak ada `hx-get`/`hx-post`), form dialog malah sudah
+  eksplisit `hx-boost="false"` sebelumnya (antisipasi masalah serupa untuk
+  submit form). Navigasi jadi full page load standar.
+- Verifikasi: build OK; 30/30 test tetap lulus.
+
+### 2026-08-18 — Remake UI dashboard: navbar horizontal + responsive
+- Keputusan (dari AskQuestion user): navbar isi Dashboard, menu user
+  (username+Logout), placeholder Fase 3–5 ("Segera hadir", non-klik), dan
+  search project/test case. Mobile: navbar tetap horizontal scrollable
+  (bukan hamburger).
+- Dikerjakan: navbar sticky (`.navbar`) dengan CSS grid area brand/nav/search/
+  user; toolbar halaman terpisah dari navbar (`.page-toolbar`); daftar project
+  dibungkus `.project-list` jadi grid 2 kolom di layar ≥900px; search client-side
+  (filter `.project-card`/`.test-case` by nama, tanpa API baru) dengan debounce
+  120ms; dropdown user menu (klik luar/Escape menutup); `renderUserIdentity`
+  decode payload JWT (base64, tanpa verifikasi signature — hanya tampilan,
+  bukan keputusan auth) untuk tampilkan username.
+- Endpoint baru: `POST /auth/logout` (publik di middleware, supaya tetap bisa
+  clear cookie walau token sudah kedaluwarsa) — set cookie `auth_token`
+  Max-Age=0. Client hapus `sessionStorage` lalu redirect `/dashboard/login`.
+- Semua id/class yang dipakai `dashboard.js` dan test Playwright (dashboard-crud,
+  dashboard-analysis) dipertahankan persis; hanya menambah pembungkus baru.
+- Verifikasi: build OK; 30/30 test (setelah `npx playwright install chromium`
+  karena browser belum terpasang di mesin ini — sudah terpasang sekarang).
+
+### 2026-08-18 — Gerbang `/` redirect login/dashboard
+- Keputusan: `GET /` publik; JWT valid → `/dashboard`, tidak ada/invalid →
+  `/dashboard/login` (bukan 401 JSON).
+- Dikerjakan: `getValidAuthUser` di auth middleware + route redirect di
+  dashboard.routes.
+
+### 2026-08-18 — Set docs/memory.md sebagai Cursor memory
+- Keputusan: `docs/memory.md` adalah memory lintas sesi (bukan status step,
+  bukan instruction). Rule Cursor `.cursor/rules/memory.mdc` always apply
+  menunjuk file ini + snapshot ringkas; detail keputusan/log tetap di sini.
+- Dikerjakan: perkuat `memory.mdc` dan pointer di `AGENTS.md`.
+
+### 2026-08-18 — Set docs/instruction.md sebagai Cursor rules
+- Dikerjakan: `docs/instruction.md` di-set ke `.cursor/rules/` —
+  `instruction.mdc` (always apply), `code.mdc` (`*.ts/js/sql`),
+  `ui-ajax.mdc` (`src/ui/**`). `memory.mdc` tetap always apply, fokus memory.
+- `AGENTS.md` menunjuk ke file instruction + rules Cursor.
 
 ### 2026-08-17 — CRUD UI Lengkap sampai Step 20
 - Dikerjakan: dialog create project, indikator konfigurasi provider/model,

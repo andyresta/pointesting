@@ -46,4 +46,16 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
     return { token, tokenType: 'Bearer', expiresIn: '7d' };
   });
+
+  // Keterangan: Menghapus cookie auth (Max-Age=0) supaya gerbang "/" tidak
+  // membawa user yang sudah logout balik ke dashboard. Publik (tidak butuh
+  // token valid) karena tujuannya membersihkan sesi, termasuk saat token
+  // sudah kedaluwarsa.
+  app.post('/auth/logout', async (_request, reply) => {
+    reply.header(
+      'Set-Cookie',
+      `${AUTH_COOKIE_NAME}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`,
+    );
+    return { status: 'ok' };
+  });
 }

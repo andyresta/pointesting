@@ -79,6 +79,7 @@ export const stepsSchema = z
  */
 export const createTestCaseBodySchema = z.object({
   title: nonEmptyString('title'),
+  description: z.string().trim().optional(),
   steps: stepsSchema,
   expected: expectedSchema,
   source: z.string().min(1).optional(),
@@ -92,6 +93,7 @@ export const createTestCaseBodySchema = z.object({
 export const updateTestCaseBodySchema = z
   .object({
     title: nonEmptyString('title').optional(),
+    description: z.string().trim().optional(),
     steps: stepsSchema.optional(),
     expected: expectedSchema.optional(),
     source: z.string().min(1).optional(),
@@ -99,12 +101,13 @@ export const updateTestCaseBodySchema = z
   .refine(
     (data) =>
       data.title !== undefined ||
+      data.description !== undefined ||
       data.steps !== undefined ||
       data.expected !== undefined ||
       data.source !== undefined,
     {
       message:
-        'Tidak ada field valid untuk di-update (title/steps/expected/source)',
+        'Tidak ada field valid untuk di-update (title/description/steps/expected/source)',
     },
   );
 

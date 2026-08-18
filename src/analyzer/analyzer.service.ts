@@ -1,5 +1,6 @@
 import { config, type ProviderConfig, type ProviderName } from '../config/env';
 import { analysisResultRepository } from '../db/repositories/analysis-result.repository';
+import { projectProviderRepository } from '../db/repositories/project-provider.repository';
 import { projectRepository } from '../db/repositories/project.repository';
 import { testCaseRepository } from '../db/repositories/test-case.repository';
 import { testRunRepository } from '../db/repositories/test-run.repository';
@@ -7,10 +8,12 @@ import type {
   AnalysisResultRecord,
   JsonValue,
   Project,
+  ProjectProviderSecret,
   TestCase,
   TestRun,
 } from '../db/repositories/types';
 import { broadcastToRun } from '../ws/gateway';
+import { createAnalyzerProviders } from './provider-factory';
 import { buildAnalyzerInput } from './prompt-builder';
 import { ProviderError } from './provider.error';
 import type {
@@ -22,7 +25,7 @@ import { claudeAnalyzerProvider } from './providers/claude.provider';
 import { deepseekAnalyzerProvider } from './providers/deepseek.provider';
 import { kimiAnalyzerProvider } from './providers/kimi.provider';
 import { openaiAnalyzerProvider } from './providers/openai.provider';
-import { opencodeAnalyzerProvider } from './providers/opencode.provider';
+import { opencodeAnalyzerProvider, opencodeGoAnalyzerProvider } from './providers/opencode.provider';
 import { getRawProviderResponse } from './providers/provider-utils';
 
 const PROVIDER_NAMES: ProviderName[] = [
@@ -31,6 +34,7 @@ const PROVIDER_NAMES: ProviderName[] = [
   'kimi',
   'openai',
   'opencode',
+  'opencode-go',
 ];
 
 export const analyzerProviders: Record<ProviderName, AnalyzerProvider> = {
@@ -39,6 +43,7 @@ export const analyzerProviders: Record<ProviderName, AnalyzerProvider> = {
   kimi: kimiAnalyzerProvider,
   openai: openaiAnalyzerProvider,
   opencode: opencodeAnalyzerProvider,
+  'opencode-go': opencodeGoAnalyzerProvider,
 };
 
 export class AllProvidersFailedError extends Error {
@@ -90,6 +95,10 @@ export interface AnalyzerServiceDependencies {
   analysisResults: AnalysisResultWriter;
   providers: Record<ProviderName, AnalyzerProvider>;
   providerConfigs: Record<ProviderName, ProviderConfig>;
+  loadProjectProviderSecrets?(projectId: string): Promise<ProjectProviderSecret[]>;
+  createProviders?(
+    providerConfigs: Record<ProviderName, ProviderConfig>,
+  ): Record<ProviderName, AnalyzerProvider>;
   buildInput(testRunId: string): Promise<AnalyzerInput>;
   broadcast(runId: string, result: AnalysisResult & { provider: ProviderName }): void;
   warn(message: string): void;
@@ -126,23 +135,61 @@ function normalizeRawResponse(
 }
 
 /**
- * Keterangan: Menyusun urutan fallback deterministik: provider default selalu
- * dicoba dulu, lalu provider lain yang memiliki API key secara alfabetis.
+ * Keterangan: Menyusun urutan fallback: default project, lalu provider yang
+ * punya key di tabel project (sort_order), lalu sisa yang punya key env.
  */
 export function buildProviderOrder(
   defaultProvider: string | null,
   providerConfigs: Record<ProviderName, ProviderConfig>,
+  projectProviderOrder: ProviderName[] = [],
 ): ProviderName[] {
   const validDefault = isProviderName(defaultProvider)
     ? defaultProvider
     : undefined;
-  const configured = PROVIDER_NAMES.filter(
-    (provider) => Boolean(providerConfigs[provider].apiKey),
+  const configured = new Set(
+    PROVIDER_NAMES.filter((provider) => Boolean(providerConfigs[provider].apiKey)),
   );
-  return [
-    ...(validDefault ? [validDefault] : []),
-    ...configured.filter((provider) => provider !== validDefault),
-  ];
+  const ordered: ProviderName[] = [];
+  const pushIfNew = (provider: ProviderName) => {
+    if (!ordered.includes(provider)) {
+      ordered.push(provider);
+    }
+  };
+
+  if (validDefault) {
+    pushIfNew(validDefault);
+  }
+  for (const provider of projectProviderOrder) {
+    if (configured.has(provider)) {
+      pushIfNew(provider);
+    }
+  }
+  for (const provider of PROVIDER_NAMES.filter((name) => configured.has(name)).sort(
+    (left, right) => left.localeCompare(right),
+  )) {
+    pushIfNew(provider);
+  }
+  return ordered;
+}
+
+/**
+ * Keterangan: Menimpa konfigurasi env dengan API key/model yang tersimpan
+ * per project. Key project selalu menang; model project dipakai jika diisi.
+ */
+export function mergeProviderConfigs(
+  envConfigs: Record<ProviderName, ProviderConfig>,
+  projectSecrets: ProjectProviderSecret[],
+): Record<ProviderName, ProviderConfig> {
+  const merged = { ...envConfigs };
+  for (const secret of projectSecrets) {
+    const current = merged[secret.provider];
+    merged[secret.provider] = {
+      ...current,
+      apiKey: secret.apiKey,
+      defaultModel: secret.defaultModel || current.defaultModel,
+    };
+  }
+  return merged;
 }
 
 /**
@@ -203,14 +250,23 @@ export function createAnalyzeTestRun(
     }
 
     const input = await dependencies.buildInput(testRunId);
+    const projectSecrets =
+      (await dependencies.loadProjectProviderSecrets?.(project.id)) ?? [];
+    const providerConfigs = mergeProviderConfigs(
+      dependencies.providerConfigs,
+      projectSecrets,
+    );
+    const providers =
+      dependencies.createProviders?.(providerConfigs) ?? dependencies.providers;
     const providerOrder = buildProviderOrder(
       project.defaultProvider ?? 'claude',
-      dependencies.providerConfigs,
+      providerConfigs,
+      projectSecrets.map((secret) => secret.provider),
     );
     const outcome = await analyzeWithFallback(
       input,
       providerOrder,
-      dependencies.providers,
+      providers,
       dependencies.warn,
     );
     const rawProviderResponse = getRawProviderResponse(outcome.result);
@@ -239,6 +295,9 @@ const analyzeTestRunWithDefaults = createAnalyzeTestRun({
   analysisResults: analysisResultRepository,
   providers: analyzerProviders,
   providerConfigs: config.providers,
+  loadProjectProviderSecrets: (projectId) =>
+    projectProviderRepository.findSecretsByProjectId(projectId),
+  createProviders: createAnalyzerProviders,
   buildInput: buildAnalyzerInput,
   broadcast: (runId, analysisResult) => {
     broadcastToRun(runId, {

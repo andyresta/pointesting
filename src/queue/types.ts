@@ -17,6 +17,18 @@ export interface AnalysisJob {
 }
 
 /**
+ * Keterangan: Job generate test case via AI + live Playwright — dipush ke
+ * testRunQueue karena memakai browser (berat, sama seperti test run).
+ */
+export interface GenerateJob {
+  type: 'generate';
+  generateId: string;
+  projectId: string;
+  prompt: string;
+  extraData?: string;
+}
+
+/**
  * Keterangan: Union semua tipe job yang dikenal oleh in-memory queue.
  */
-export type QueueJob = TestRunJob | AnalysisJob;
+export type QueueJob = TestRunJob | AnalysisJob | GenerateJob;

@@ -2,7 +2,7 @@ import PQueue from 'p-queue';
 import { analyzeTestRun } from '../analyzer/analyzer.service';
 import { config } from '../config/env';
 import { testRunRepository } from '../db/repositories/test-run.repository';
-import type { AnalysisJob, TestRunJob } from './types';
+import type { AnalysisJob, GenerateJob, TestRunJob } from './types';
 
 /**
  * Keterangan: Named queue in-memory untuk job eksekusi test case (Playwright).
@@ -53,6 +53,35 @@ export async function handleAnalysisJob(
 }
 
 /**
+ * Keterangan: Menjalankan generate test case dengan failure boundary; error
+ * dikirim ke subscriber live panel dan tidak mematikan worker queue.
+ */
+export async function handleGenerateJob(job: GenerateJob): Promise<void> {
+  try {
+    const { generateTestCasesFromPrompt } = await import(
+      '../generator/generator.service.js'
+    );
+    await generateTestCasesFromPrompt({
+      projectId: job.projectId,
+      prompt: job.prompt,
+      extraData: job.extraData,
+      generateId: job.generateId,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(
+      `[testRunQueue] Generate "${job.generateId}" gagal: ${message}`,
+    );
+    const { broadcastToRun } = await import('../ws/gateway.js');
+    broadcastToRun(job.generateId, {
+      type: 'generate:error',
+      runId: job.generateId,
+      message,
+    });
+  }
+}
+
+/**
  * Keterangan: Push job eksekusi test case ke testRunQueue. Bersifat
  * fire-and-forget (tidak menunggu job selesai) — pemanggil (route API)
  * langsung lanjut tanpa terblokir oleh eksekusi job.
@@ -60,6 +89,15 @@ export async function handleAnalysisJob(
 export function enqueueTestRun(testRunId: string): void {
   const job: TestRunJob = { type: 'test_run', testRunId };
   void testRunQueue.add(() => handleTestRunJob(job));
+}
+
+/**
+ * Keterangan: Push job generate test case ke testRunQueue (browser + AI).
+ * Fire-and-forget; route API langsung balas 202 + generateId untuk live WS.
+ */
+export function enqueueGenerate(job: Omit<GenerateJob, 'type'>): void {
+  const queued: GenerateJob = { type: 'generate', ...job };
+  void testRunQueue.add(() => handleGenerateJob(queued));
 }
 
 /**

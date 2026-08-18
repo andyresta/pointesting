@@ -56,6 +56,17 @@ const modelEndpoints: Record<ProviderName, ProviderModelEndpoint> = {
       return headers;
     },
   },
+  'opencode-go': {
+    url: 'https://opencode.ai/zen/go/v1/models',
+    requiresApiKey: false,
+    headers: (apiKey) => {
+      const headers: Record<string, string> = {};
+      if (apiKey) {
+        headers.Authorization = `Bearer ${apiKey}`;
+      }
+      return headers;
+    },
+  },
 };
 
 const catalogCache = new Map<
@@ -82,17 +93,19 @@ function parseModelIds(payload: ModelListResponse): string[] {
  * Request dibatasi 10 detik dan API key hanya dikirim lewat header server-side,
  * tidak pernah diteruskan ke client/UI.
  */
-async function fetchProviderModels(provider: ProviderName): Promise<string[]> {
-  const providerConfig = config.providers[provider];
+async function fetchProviderModels(
+  provider: ProviderName,
+  apiKey: string,
+): Promise<string[]> {
   const endpoint = modelEndpoints[provider];
 
-  if (endpoint.requiresApiKey && !providerConfig.apiKey) {
+  if (endpoint.requiresApiKey && !apiKey) {
     throw new Error(`API key provider "${provider}" belum dikonfigurasi`);
   }
 
   const response = await fetch(endpoint.url, {
     method: 'GET',
-    headers: endpoint.headers(providerConfig.apiKey),
+    headers: endpoint.headers(apiKey),
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
 
@@ -117,16 +130,19 @@ async function fetchProviderModels(provider: ProviderName): Promise<string[]> {
 export async function getProviderModelCatalog(
   provider: ProviderName,
   forceRefresh = false,
+  apiKeyOverride?: string,
 ): Promise<ProviderModelCatalog> {
+  const skipCache = Boolean(apiKeyOverride);
   const cached = catalogCache.get(provider);
-  if (!forceRefresh && cached && cached.expiresAt > Date.now()) {
+  if (!skipCache && !forceRefresh && cached && cached.expiresAt > Date.now()) {
     return cached.catalog;
   }
 
   const providerConfig = config.providers[provider];
+  const apiKey = apiKeyOverride?.trim() || providerConfig.apiKey;
 
   try {
-    const models = await fetchProviderModels(provider);
+    const models = await fetchProviderModels(provider, apiKey);
     const catalog: ProviderModelCatalog = {
       provider,
       defaultModel:
@@ -135,13 +151,15 @@ export async function getProviderModelCatalog(
           : models[0]!,
       models,
       source: 'provider',
-      configured: Boolean(providerConfig.apiKey),
+      configured: Boolean(apiKey),
     };
 
-    catalogCache.set(provider, {
-      expiresAt: Date.now() + CACHE_TTL_MS,
-      catalog,
-    });
+    if (!skipCache) {
+      catalogCache.set(provider, {
+        expiresAt: Date.now() + CACHE_TTL_MS,
+        catalog,
+      });
+    }
     return catalog;
   } catch {
     return {
@@ -149,7 +167,7 @@ export async function getProviderModelCatalog(
       defaultModel: providerConfig.defaultModel || providerConfig.availableModels[0] || '',
       models: providerConfig.availableModels,
       source: 'env_fallback',
-      configured: Boolean(providerConfig.apiKey),
+      configured: Boolean(apiKey),
     };
   }
 }

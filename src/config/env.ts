@@ -70,6 +70,8 @@ const envSchema = z.object({
   OPENCODE_API_KEY: optionalEnvString(),
   OPENCODE_MODEL: optionalEnvString(),
   OPENCODE_MODELS: optionalEnvString(),
+  OPENCODE_GO_MODEL: optionalEnvString(),
+  OPENCODE_GO_MODELS: optionalEnvString(),
 
   TEST_RUN_QUEUE_CONCURRENCY: z.preprocess(
     (value) => (value === '' || value === undefined || value === null ? undefined : value),
@@ -102,7 +104,16 @@ export interface ProviderConfig {
   availableModels: string[];
 }
 
-export type ProviderName = 'claude' | 'openai' | 'deepseek' | 'kimi' | 'opencode';
+export const PROVIDER_NAMES = [
+  'claude',
+  'openai',
+  'deepseek',
+  'kimi',
+  'opencode',
+  'opencode-go',
+] as const;
+
+export type ProviderName = (typeof PROVIDER_NAMES)[number];
 
 export interface Config extends EnvShape {
   providers: Record<ProviderName, ProviderConfig>;
@@ -164,6 +175,11 @@ function loadConfig(): Config {
       deepseek: buildProviderConfig(env.DEEPSEEK_API_KEY, env.DEEPSEEK_MODEL, env.DEEPSEEK_MODELS),
       kimi: buildProviderConfig(env.KIMI_API_KEY, env.KIMI_MODEL, env.KIMI_MODELS),
       opencode: buildProviderConfig(env.OPENCODE_API_KEY, env.OPENCODE_MODEL, env.OPENCODE_MODELS),
+      'opencode-go': buildProviderConfig(
+        env.OPENCODE_API_KEY,
+        env.OPENCODE_GO_MODEL,
+        env.OPENCODE_GO_MODELS,
+      ),
     },
   };
 }

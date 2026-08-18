@@ -1,0 +1,29 @@
+---
+description: Aturan kode, API, dan database sesuai docs/instruction.md
+globs: "**/*.{ts,js,sql}"
+alwaysApply: false
+---
+
+# Aturan kode
+
+- Setiap fungsi baru wajib komentar **Keterangan** di atasnya (tujuan, bukan ulang nama fungsi).
+- Ikuti gaya kode yang sudah ada (naming, import, error handling).
+- TypeScript strict; jangan longgarkan `tsconfig` tanpa diminta.
+- Pakai `config` dari `src/config/env.ts`, bukan `process.env` langsung.
+- Root kode sejajar `docs/` (bukan subfolder `ai-testing-tool/`).
+- Call LLM vendor hanya lewat adapter provider / `LLMClient`, bukan dari route.
+- Artifact di `./storage/artifacts/<run_id>/`.
+- Endpoint yang komponennya belum ada → `ApiError(501, ...)` dengan pesan step yang akan mengimplementasikannya.
+
+## API / AJAX
+
+- Preferensi: call API/AJAX memakai **POST**.
+- Pengecualian: method di spesifikasi bagian 5 dan `GET /health`.
+- Format error: `{ error: string, statusCode: number }`.
+
+## Database
+
+- Koneksi: `DB_HOST`, `DB_NAME`, `DB_PORT`, `DB_USER`, `DB_PASS` (bukan `DATABASE_URL`).
+- Migration SQL bernomor di `src/db/migrations/`, tracking lewat `_migrations`.
+- DDL / nama kolom mengikuti dokumen teknis.
+- Query berparameter; update field dibatasi whitelist.

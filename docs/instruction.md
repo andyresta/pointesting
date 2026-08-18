@@ -173,8 +173,9 @@ Gunakan placeholder / env var / nilai mask. `.env` di-ignore git; contoh aman ad
 - Stack: Node.js + TypeScript (strict), Fastify, `ws`, `pg`, `dotenv`, `zod`,
 Playwright, queue in-memory (`p-queue@6` karena project CommonJS).
 - Auth personal/single-user dari env (JWT), tanpa tabel user.
-- Provider AI: Claude, OpenAI, DeepSeek, Kimi, OpenCode (Zen) — adapter di
-`src/analyzer/providers/` (Fase 2); katalog model dinamis via `POST /ai/models`.
+- Provider AI: Claude, OpenAI, DeepSeek, Kimi, OpenCode Zen, OpenCode Go —
+adapter di `src/analyzer/providers/` (Fase 2); katalog model dinamis via
+`POST /ai/models`. OpenCode Zen dan Go memakai satu `OPENCODE_API_KEY`.
 - Artifact di filesystem lokal `./storage/artifacts/<run_id>/`.
 - Call LLM vendor hanya lewat adapter provider / `LLMClient`, bukan dari route.
 

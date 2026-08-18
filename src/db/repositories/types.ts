@@ -12,6 +12,8 @@ export interface Project {
   name: string;
   baseUrl: string | null;
   defaultProvider: string | null;
+  instruction: string | null;
+  extraData: string | null;
   createdAt: Date | null;
 }
 
@@ -19,14 +21,43 @@ export interface ProjectCreateData {
   name: string;
   baseUrl?: string | null;
   defaultProvider?: string | null;
+  instruction?: string | null;
+  extraData?: string | null;
 }
 
 export type ProjectUpdateData = Partial<ProjectCreateData>;
+
+export interface ProjectProviderPublic {
+  provider: ProviderName;
+  hasApiKey: boolean;
+  apiKeyMasked: string;
+  defaultModel: string | null;
+  sortOrder: number;
+}
+
+export interface ProjectProviderSecret {
+  provider: ProviderName;
+  apiKey: string;
+  defaultModel: string | null;
+  sortOrder: number;
+}
+
+export interface ProjectProviderWrite {
+  provider: ProviderName;
+  apiKey?: string;
+  defaultModel?: string | null;
+  remove?: boolean;
+}
+
+export interface ProjectWithProviders extends Project {
+  providers: ProjectProviderPublic[];
+}
 
 export interface TestCase {
   id: string;
   projectId: string;
   title: string;
+  description: string | null;
   steps: JsonValue;
   expected: JsonValue;
   source: string | null;
@@ -37,6 +68,7 @@ export interface TestCase {
 export interface TestCaseCreateData {
   projectId: string;
   title: string;
+  description?: string | null;
   steps: JsonValue;
   expected: JsonValue;
   source?: string | null;
@@ -45,6 +77,7 @@ export interface TestCaseCreateData {
 export interface TestCaseUpdateData {
   projectId?: string;
   title?: string;
+  description?: string | null;
   steps?: JsonValue;
   expected?: JsonValue;
   source?: string | null;

@@ -1,4 +1,4 @@
-import { config } from '../../config/env';
+import { config, type ProviderName } from '../../config/env';
 import type { LLMClient, LLMUserContent } from '../llm-client.interface';
 import { ProviderError } from '../provider.error';
 import {
@@ -10,6 +10,7 @@ import {
 } from './provider-utils';
 
 const OPENCODE_ZEN_BASE_URL = 'https://opencode.ai/zen/v1';
+const OPENCODE_GO_BASE_URL = 'https://opencode.ai/zen/go/v1';
 
 type OpenCodeProtocol = 'chat' | 'messages' | 'responses' | 'gemini';
 
@@ -40,6 +41,8 @@ export interface OpenCodeClientOptions {
   apiKey?: string;
   model?: string;
   fetchImpl?: FetchImplementation;
+  providerName?: Extract<ProviderName, 'opencode' | 'opencode-go'>;
+  baseUrl?: string;
 }
 
 /**
@@ -116,26 +119,35 @@ export class OpenCodeLLMClient implements LLMClient {
   private readonly apiKey: string;
   private readonly model: string;
   private readonly fetchImpl: FetchImplementation;
+  private readonly providerName: Extract<ProviderName, 'opencode' | 'opencode-go'>;
+  private readonly baseUrl: string;
 
   /**
-   * Keterangan: Membuat client OpenCode Zen multi-protocol berdasarkan model
-   * dinamis yang dipilih dari katalog provider.
+   * Keterangan: Membuat client OpenCode multi-protocol. Zen dan Go memakai
+   * API key yang sama, tetapi base URL berbeda sesuai produk yang dipilih.
    */
   constructor(options: OpenCodeClientOptions = {}) {
-    this.apiKey = options.apiKey ?? config.providers.opencode.apiKey;
-    this.model = options.model ?? config.providers.opencode.defaultModel;
+    this.providerName = options.providerName ?? 'opencode';
+    this.baseUrl =
+      options.baseUrl ??
+      (this.providerName === 'opencode-go'
+        ? OPENCODE_GO_BASE_URL
+        : OPENCODE_ZEN_BASE_URL);
+    const providerConfig = config.providers[this.providerName];
+    this.apiKey = options.apiKey ?? providerConfig.apiKey;
+    this.model = options.model ?? providerConfig.defaultModel;
     this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
   /**
    * Keterangan: Mengirim text content melalui endpoint resmi keluarga model
-   * OpenCode Zen; screenshot diabaikan karena kemampuan vision tidak seragam.
+   * OpenCode; screenshot diabaikan karena kemampuan vision tidak seragam.
    */
   async complete(
     systemPrompt: string,
     userContent: LLMUserContent[],
   ): Promise<string> {
-    assertProviderConfigured('opencode', this.apiKey, this.model);
+    assertProviderConfigured(this.providerName, this.apiKey, this.model);
     const protocol = getOpenCodeProtocol(this.model);
     const userText = joinTextContent(userContent);
     const headers = { Authorization: `Bearer ${this.apiKey}` };
@@ -143,7 +155,7 @@ export class OpenCodeLLMClient implements LLMClient {
     let endpoint: string;
     let body: unknown;
     if (protocol === 'messages') {
-      endpoint = `${OPENCODE_ZEN_BASE_URL}/messages`;
+      endpoint = `${this.baseUrl}/messages`;
       body = {
         model: this.model,
         max_tokens: 1_000,
@@ -151,21 +163,21 @@ export class OpenCodeLLMClient implements LLMClient {
         messages: [{ role: 'user', content: userText }],
       };
     } else if (protocol === 'responses') {
-      endpoint = `${OPENCODE_ZEN_BASE_URL}/responses`;
+      endpoint = `${this.baseUrl}/responses`;
       body = {
         model: this.model,
         instructions: systemPrompt,
         input: userText,
       };
     } else if (protocol === 'gemini') {
-      endpoint = `${OPENCODE_ZEN_BASE_URL}/models/${encodeURIComponent(this.model)}:generateContent`;
+      endpoint = `${this.baseUrl}/models/${encodeURIComponent(this.model)}:generateContent`;
       body = {
         systemInstruction: { parts: [{ text: systemPrompt }] },
         contents: [{ role: 'user', parts: [{ text: userText }] }],
         generationConfig: { responseMimeType: 'application/json' },
       };
     } else {
-      endpoint = `${OPENCODE_ZEN_BASE_URL}/chat/completions`;
+      endpoint = `${this.baseUrl}/chat/completions`;
       body = {
         model: this.model,
         messages: [
@@ -177,11 +189,11 @@ export class OpenCodeLLMClient implements LLMClient {
 
     const payload = await postProviderJson<
       ChatResponse | MessagesResponse | ResponsesResponse | GeminiResponse
-    >('opencode', endpoint, headers, body, this.fetchImpl);
+    >(this.providerName, endpoint, headers, body, this.fetchImpl);
     const responseText = extractOpenCodeText(protocol, payload);
     if (!responseText) {
       throw new ProviderError(
-        'opencode',
+        this.providerName,
         `Response protokol ${protocol} tidak memiliki text`,
       );
     }
@@ -191,15 +203,25 @@ export class OpenCodeLLMClient implements LLMClient {
 
 export class OpenCodeAnalyzerProvider extends BaseAnalyzerProvider {
   /**
-   * Keterangan: Membuat analyzer OpenCode Zen text-only secara konservatif
+   * Keterangan: Membuat analyzer OpenCode text-only secara konservatif
    * karena dukungan image berbeda pada tiap model katalog dinamis.
    */
-  constructor(client: LLMClient = new OpenCodeLLMClient()) {
-    super('opencode', false, client);
+  constructor(
+    client: LLMClient = new OpenCodeLLMClient(),
+    providerName: Extract<ProviderName, 'opencode' | 'opencode-go'> = 'opencode',
+  ) {
+    super(providerName, false, client);
   }
 }
 
 export const opencodeLLMClient = new OpenCodeLLMClient();
 export const opencodeAnalyzerProvider = new OpenCodeAnalyzerProvider(
   opencodeLLMClient,
+);
+export const opencodeGoLLMClient = new OpenCodeLLMClient({
+  providerName: 'opencode-go',
+});
+export const opencodeGoAnalyzerProvider = new OpenCodeAnalyzerProvider(
+  opencodeGoLLMClient,
+  'opencode-go',
 );

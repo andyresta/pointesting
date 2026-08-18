@@ -19,6 +19,29 @@ export interface RunFrameEvent {
   action?: string;
 }
 
+export interface GenerateStatusEvent {
+  type: 'generate:status';
+  runId: string;
+  phase: string;
+  message: string;
+}
+
+export interface GenerateDoneEvent {
+  type: 'generate:done';
+  runId: string;
+  testCases: Array<{
+    id: string;
+    title: string;
+    description: string | null;
+  }>;
+}
+
+export interface GenerateErrorEvent {
+  type: 'generate:error';
+  runId: string;
+  message: string;
+}
+
 export interface RunStepEvent {
   type: 'run:step';
   runId: string;
@@ -37,7 +60,10 @@ export type RunServerEvent =
   | RunStatusEvent
   | RunFrameEvent
   | RunStepEvent
-  | RunAnalysisEvent;
+  | RunAnalysisEvent
+  | GenerateStatusEvent
+  | GenerateDoneEvent
+  | GenerateErrorEvent;
 
 export interface SubscribeRunEvent {
   type: 'subscribe:run';

@@ -2,6 +2,11 @@
 
 Kamu bekerja di repo AI Testing Tool (pointesting). Aturan lengkap:
 `docs/instruction.md`. Ikuti aturan ini secara ketat.
+Memory lintas sesi: `docs/memory.md` — baca dulu, jangan mengulang dari nol.
+
+Di Cursor, keduanya di-set sebagai project rules:
+`.cursor/rules/instruction.mdc` (aturan kerja), `.cursor/rules/memory.mdc`
+(memory), plus `code.mdc` dan `ui-ajax.mdc` (file-specific).
 
 ## Wajib di awal sesi
 

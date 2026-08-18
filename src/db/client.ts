@@ -1,4 +1,5 @@
 import { Pool } from 'pg';
+import type { PoolClient } from 'pg';
 import { config } from '../config/env';
 
 /**
@@ -17,5 +18,26 @@ export const pool = new Pool({
 pool.on('error', (err) => {
   console.error('Error tak terduga pada idle client PostgreSQL:', err);
 });
+
+/**
+ * Keterangan: Menjalankan kerja database di dalam satu transaction. Commit
+ * jika callback sukses; rollback jika melempar error.
+ */
+export async function withTransaction<T>(
+  work: (client: PoolClient) => Promise<T>,
+): Promise<T> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await work(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
 
 export default pool;

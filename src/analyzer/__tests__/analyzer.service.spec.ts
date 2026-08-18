@@ -10,6 +10,7 @@ import {
   AllProvidersFailedError,
   buildProviderOrder,
   createAnalyzeTestRun,
+  mergeProviderConfigs,
   type AnalyzerServiceDependencies,
 } from '../analyzer.service';
 import { ProviderError } from '../provider.error';
@@ -26,6 +27,7 @@ const PROVIDER_NAMES: ProviderName[] = [
   'deepseek',
   'kimi',
   'opencode',
+  'opencode-go',
 ];
 
 const INPUT: AnalyzerInput = {
@@ -109,6 +111,7 @@ function createServiceDependencies(
     id: 'case-1',
     projectId: 'project-1',
     title: 'Test',
+    description: null,
     steps: [],
     expected: [],
     source: 'manual',
@@ -120,6 +123,8 @@ function createServiceDependencies(
     name: 'Project',
     baseUrl: null,
     defaultProvider: 'claude',
+    instruction: null,
+    extraData: null,
     createdAt: null,
   };
 
@@ -271,4 +276,22 @@ test('urutan provider deterministik dan mengabaikan default tidak dikenal', () =
     'opencode',
     'deepseek',
   ]);
+});
+
+test('mergeProviderConfigs menimpa API key env dengan key project', () => {
+  const envConfigs = createProviderConfigs(['deepseek']);
+  const merged = mergeProviderConfigs(envConfigs, [
+    {
+      provider: 'claude',
+      apiKey: 'project-key-placeholder',
+      defaultModel: 'claude-project',
+      sortOrder: 0,
+    },
+  ]);
+  expect(merged.claude.apiKey).toBe('project-key-placeholder');
+  expect(merged.claude.defaultModel).toBe('claude-project');
+  expect(merged.deepseek.apiKey).toBe('key-placeholder');
+  expect(
+    buildProviderOrder('claude', merged, ['claude', 'deepseek']),
+  ).toEqual(['claude', 'deepseek']);
 });

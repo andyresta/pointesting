@@ -4,23 +4,26 @@ import {
   getAllProviderModelCatalogs,
   getProviderModelCatalog,
 } from '../../analyzer/model-catalog';
-import type { ProviderName } from '../../config/env';
+import { PROVIDER_NAMES, type ProviderName } from '../../config/env';
+import { projectProviderRepository } from '../../db/repositories/project-provider.repository';
 import { ApiError } from '../errors';
 
 const modelCatalogBodySchema = z.object({
-  provider: z
-    .enum(['claude', 'openai', 'deepseek', 'kimi', 'opencode'])
-    .optional(),
+  provider: z.enum(PROVIDER_NAMES).optional(),
   forceRefresh: z.boolean().optional().default(false),
+  apiKey: z.string().optional(),
+  projectId: z.string().uuid().optional(),
 });
 
 /**
  * Keterangan: Memvalidasi body endpoint katalog model. `provider` opsional;
- * tanpa provider, endpoint mengembalikan katalog kelima provider sekaligus.
+ * tanpa provider, endpoint mengembalikan katalog semua provider sekaligus.
  */
 function parseModelCatalogBody(data: unknown): {
   provider?: ProviderName;
   forceRefresh: boolean;
+  apiKey?: string;
+  projectId?: string;
 } {
   const parsed = modelCatalogBodySchema.safeParse(data ?? {});
   if (!parsed.success) {
@@ -43,7 +46,18 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
     const body = parseModelCatalogBody(request.body);
 
     if (body.provider) {
-      return getProviderModelCatalog(body.provider, body.forceRefresh);
+      let apiKey = body.apiKey?.trim();
+      if (!apiKey && body.projectId) {
+        const secrets = await projectProviderRepository.findSecretsByProjectId(
+          body.projectId,
+        );
+        apiKey = secrets.find((secret) => secret.provider === body.provider)?.apiKey;
+      }
+      return getProviderModelCatalog(
+        body.provider,
+        body.forceRefresh,
+        apiKey,
+      );
     }
 
     return {
