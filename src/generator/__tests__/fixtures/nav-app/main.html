@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Dashboard Bengkel</title>
+  </head>
+  <body>
+    <h1>Dashboard Bengkel</h1>
+    <button id="menu-toggle" class="navbar-toggler" aria-controls="side-nav" aria-expanded="false">
+      Menu
+    </button>
+    <nav id="side-nav" style="display: none">
+      <a id="nav-kendaraan" href="page-a.html">Kendaraan</a>
+      <a id="nav-pelanggan" href="page-b.html">Pelanggan</a>
+    </nav>
+    <script>
+      document.getElementById('menu-toggle').addEventListener('click', () => {
+        const nav = document.getElementById('side-nav');
+        const isHidden = nav.style.display === 'none';
+        nav.style.display = isHidden ? 'block' : 'none';
+        document
+          .getElementById('menu-toggle')
+          .setAttribute('aria-expanded', isHidden ? 'true' : 'false');
+      });
+    </script>
+  </body>
+</html>

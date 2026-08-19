@@ -14,8 +14,16 @@ import { testCaseRepository } from '../db/repositories/test-case.repository';
 import { testRunRepository } from '../db/repositories/test-run.repository';
 import { testStepResultRepository } from '../db/repositories/test-step-result.repository';
 import type { TestRunStatus } from '../db/repositories/types';
-import { enqueueAnalysis } from '../queue/queue';
+import {
+  addSuiteAnalysisTestRun,
+  beginSuiteAnalysisTracking,
+  discardSuiteAnalysisTracking,
+  enqueueAnalysis,
+  enqueueSuiteAnalysis,
+  sealSuiteAnalysisTracking,
+} from '../queue/queue';
 import { broadcastToRun } from '../ws/gateway';
+import { PlaywrightPageDriver } from './page-driver';
 import { collectArtifacts } from './reporter';
 import {
   startScreencast,
@@ -135,6 +143,7 @@ async function writeStructuredLogs(
 async function saveStepResult(
   testRunId: string,
   result: StepExecutionResult,
+  broadcast?: { runId: string; testCaseId?: string },
 ): Promise<void> {
   await testStepResultRepository.create({
     testRunId,
@@ -144,12 +153,14 @@ async function saveStepResult(
     errorMessage: result.errorMessage,
     durationMs: result.durationMs,
   });
-  broadcastToRun(testRunId, {
+  broadcastToRun(broadcast?.runId ?? testRunId, {
     type: 'run:step',
-    runId: testRunId,
+    runId: broadcast?.runId ?? testRunId,
     stepIndex: result.index,
     action: result.action,
     status: result.status,
+    testCaseId: broadcast?.testCaseId,
+    testRunId,
   });
 }
 
@@ -269,7 +280,7 @@ async function runTestRun(testRunId: string): Promise<void> {
     const onStepComplete = async (result: StepExecutionResult): Promise<void> => {
       await saveStepResult(testRunId, result);
     };
-    const stepResults = await executeSteps(page, steps, onStepComplete);
+    const stepResults = await executeSteps(new PlaywrightPageDriver(page), steps, onStepComplete);
 
     await context.tracing.stop({ path: tracePath });
     tracingStarted = false;
@@ -405,4 +416,384 @@ export async function executeTestRun(testRunId: string): Promise<void> {
       error,
     );
   }
+}
+
+export interface SharedContextRunOptions {
+  liveRunId: string;
+  projectId: string;
+  testCaseId: string;
+  testRunId: string;
+  context: BrowserContext;
+  caseIndex: number;
+  caseTotal: number;
+  getScreencast: () => ScreencastController | undefined;
+  setScreencast: (controller: ScreencastController | undefined) => void;
+  shouldAbort?: () => boolean;
+  registerPage?: (page: Page | undefined) => void;
+}
+
+interface SuiteHandle {
+  abortRequested: boolean;
+  currentPage?: Page;
+}
+
+const suiteHandles = new Map<string, SuiteHandle>();
+
+/**
+ * Keterangan: Mendaftarkan suite run ke registry abort sebelum job queue mulai
+ * supaya tombol Stop bisa dipakai sejak status queued.
+ */
+export function registerTestRunSuite(suiteRunId: string): void {
+  if (!suiteHandles.has(suiteRunId)) {
+    suiteHandles.set(suiteRunId, { abortRequested: false });
+  }
+}
+
+/**
+ * Keterangan: Menghentikan paksa suite run yang sedang jalan — page aktif
+ * ditutup agar step Playwright tidak menggantung, sisa test case dilewati.
+ */
+export function abortTestRunSuite(suiteRunId: string): boolean {
+  const handle = suiteHandles.get(suiteRunId);
+  if (!handle) {
+    return false;
+  }
+  handle.abortRequested = true;
+  void handle.currentPage?.close().catch(() => undefined);
+  return true;
+}
+
+/**
+ * Keterangan: Menjalankan satu test case di browser context yang sudah ada
+ * (dipakai suite run dan sesi persisten halaman test case).
+ */
+export async function runTestCaseInBrowserContext(
+  options: SharedContextRunOptions,
+): Promise<TestRunStatus> {
+  const {
+    liveRunId,
+    projectId,
+    testCaseId,
+    testRunId,
+    context,
+    caseIndex,
+    caseTotal,
+    getScreencast,
+    setScreencast,
+    shouldAbort,
+    registerPage,
+  } = options;
+
+  const testCase = await testCaseRepository.findById(testCaseId);
+  if (!testCase || testCase.projectId !== projectId) {
+    return 'error';
+  }
+  if (shouldAbort?.()) {
+    return 'error';
+  }
+
+  const tempDir = createTempRunDir(testRunId);
+  const tracePath = path.join(tempDir, 'trace.zip');
+  const consoleLogPath = path.join(tempDir, 'console-log.json');
+  const networkLogPath = path.join(tempDir, 'network-log.json');
+  const consoleLogs: ConsoleLogEntry[] = [];
+  const networkLogs: NetworkLogEntry[] = [];
+  let page: Page | undefined;
+  let video: Video | null = null;
+  let videoPath: string | undefined;
+  let tracingStarted = false;
+  let traceAvailable = false;
+  let caseStatus: TestRunStatus = 'error';
+
+  try {
+    page = await context.newPage();
+    registerPage?.(page);
+    video = page.video();
+    attachPageLogListeners(page, consoleLogs, networkLogs);
+
+    const existingScreencast = getScreencast();
+    if (existingScreencast) {
+      await existingScreencast.stop().catch(() => undefined);
+    }
+    setScreencast(await startScreencast(page, liveRunId));
+
+    await context.tracing.start({ screenshots: true, snapshots: true });
+    tracingStarted = true;
+
+    const steps = (testCase.steps as unknown as Step[]) ?? [];
+    const onStepComplete = async (result: StepExecutionResult): Promise<void> => {
+      await saveStepResult(testRunId, result, {
+        runId: liveRunId,
+        testCaseId,
+      });
+    };
+    const stepResults = await executeSteps(
+      new PlaywrightPageDriver(page),
+      steps,
+      onStepComplete,
+      shouldAbort,
+    );
+
+    await context.tracing.stop({ path: tracePath });
+    tracingStarted = false;
+    traceAvailable = true;
+    caseStatus = shouldAbort?.() ? 'error' : computeFinalStatus(stepResults);
+  } catch (error) {
+    if (shouldAbort?.()) {
+      caseStatus = 'error';
+    } else {
+      console.error(
+        `[executor] Error saat shared-context test_run "${testRunId}" (case ${testCaseId}):`,
+        error,
+      );
+      caseStatus = 'error';
+    }
+  } finally {
+    registerPage?.(undefined);
+    if (page && tracingStarted && tracePath) {
+      await context.tracing
+        .stop({ path: tracePath })
+        .then(() => {
+          traceAvailable = true;
+        })
+        .catch(() => undefined);
+    }
+    if (page) {
+      await page.close().catch(() => undefined);
+    }
+    if (video) {
+      await video
+        .path()
+        .then((resolvedPath) => {
+          videoPath = resolvedPath;
+        })
+        .catch(() => undefined);
+    }
+  }
+
+  try {
+    await writeStructuredLogs(
+      consoleLogPath,
+      networkLogPath,
+      consoleLogs,
+      networkLogs,
+    );
+    await collectArtifacts(testRunId, {
+      video: videoPath,
+      trace: traceAvailable && tracePath ? tracePath : undefined,
+      consoleLog: consoleLogPath,
+      networkLog: networkLogPath,
+    });
+  } catch (artifactError) {
+    caseStatus = 'error';
+    console.error(
+      `[executor] Gagal artifact shared-context test_run "${testRunId}":`,
+      artifactError,
+    );
+  }
+
+  return caseStatus;
+}
+
+/**
+ * Keterangan: Menjalankan beberapa test case berurutan dalam satu browser
+ * context Playwright agar sesi/cookie tetap hidup antar test case. Tiap test
+ * case tetap punya test_run + artifact sendiri; live view memakai suiteRunId.
+ */
+export async function executeTestRunSuite(
+  suiteRunId: string,
+  projectId: string,
+  testCaseIds: string[],
+): Promise<void> {
+  if (testCaseIds.length === 0) {
+    broadcastToRun(suiteRunId, {
+      type: 'run:status',
+      runId: suiteRunId,
+      status: 'error',
+    });
+    return;
+  }
+
+  const project = await projectRepository.findById(projectId);
+  if (!project) {
+    broadcastToRun(suiteRunId, {
+      type: 'run:status',
+      runId: suiteRunId,
+      status: 'error',
+    });
+    return;
+  }
+
+  const suiteStartedAt = new Date();
+  broadcastToRun(suiteRunId, {
+    type: 'run:status',
+    runId: suiteRunId,
+    status: 'running',
+  });
+
+  let browser: Browser | undefined;
+  let context: BrowserContext | undefined;
+  let screencast: ScreencastController | undefined;
+  const suiteHandle = suiteHandles.get(suiteRunId) ?? { abortRequested: false };
+  suiteHandles.set(suiteRunId, suiteHandle);
+  if (suiteHandle.abortRequested) {
+    suiteHandles.delete(suiteRunId);
+    broadcastToRun(suiteRunId, {
+      type: 'run:suite-done',
+      runId: suiteRunId,
+      status: 'error',
+      results: [],
+    });
+    broadcastToRun(suiteRunId, {
+      type: 'run:status',
+      runId: suiteRunId,
+      status: 'error',
+    });
+    return;
+  }
+  const suiteResults: Array<{
+    testCaseId: string;
+    testRunId: string;
+    status: TestRunStatus;
+  }> = [];
+  let suiteFinalStatus: TestRunStatus = 'passed';
+  beginSuiteAnalysisTracking(suiteRunId, projectId);
+
+  try {
+    browser = await chromium.launch();
+    const suiteVideoDir = path.join(os.tmpdir(), 'ai-testing-tool-runs', suiteRunId);
+    fs.mkdirSync(suiteVideoDir, { recursive: true });
+    context = await browser.newContext({
+      recordVideo: { dir: suiteVideoDir },
+      viewport: VIEWPORT,
+      ...(project.baseUrl ? { baseURL: project.baseUrl } : {}),
+    });
+
+    for (let caseIndex = 0; caseIndex < testCaseIds.length; caseIndex += 1) {
+      if (suiteHandle.abortRequested) {
+        suiteFinalStatus = 'error';
+        break;
+      }
+      const testCaseId = testCaseIds[caseIndex];
+      if (!testCaseId) {
+        suiteFinalStatus = 'error';
+        continue;
+      }
+      const testCase = await testCaseRepository.findById(testCaseId);
+      if (!testCase || testCase.projectId !== projectId) {
+        suiteFinalStatus = 'error';
+        continue;
+      }
+
+      const testRun = await testRunRepository.create({
+        testCaseId,
+        status: 'queued',
+      });
+      const testRunId = testRun.id;
+      addSuiteAnalysisTestRun(suiteRunId, testRunId);
+      const caseStartedAt = new Date();
+
+      broadcastToRun(suiteRunId, {
+        type: 'run:suite-case',
+        runId: suiteRunId,
+        testCaseId,
+        testRunId,
+        status: 'running',
+        caseIndex,
+        caseTotal: testCaseIds.length,
+      });
+
+      await testRunRepository.update(testRunId, {
+        status: 'running',
+        startedAt: caseStartedAt,
+      });
+
+      const caseStatus = await runTestCaseInBrowserContext({
+        liveRunId: suiteRunId,
+        projectId,
+        testCaseId,
+        testRunId,
+        context,
+        caseIndex,
+        caseTotal: testCaseIds.length,
+        getScreencast: () => screencast,
+        setScreencast: (controller) => {
+          screencast = controller;
+        },
+        shouldAbort: () => suiteHandle.abortRequested,
+        registerPage: (activePage) => {
+          suiteHandle.currentPage = activePage;
+        },
+      });
+
+      const caseFinishedAt = new Date();
+      await testRunRepository.update(testRunId, {
+        status: caseStatus,
+        finishedAt: caseFinishedAt,
+        durationMs: caseFinishedAt.getTime() - caseStartedAt.getTime(),
+      });
+      broadcastToRun(testRunId, {
+        type: 'run:status',
+        runId: testRunId,
+        status: caseStatus,
+      });
+      broadcastToRun(suiteRunId, {
+        type: 'run:suite-case',
+        runId: suiteRunId,
+        testCaseId,
+        testRunId,
+        status: caseStatus,
+        caseIndex,
+        caseTotal: testCaseIds.length,
+      });
+
+      suiteResults.push({ testCaseId, testRunId, status: caseStatus });
+      if (caseStatus !== 'passed') {
+        suiteFinalStatus = caseStatus === 'error' ? 'error' : 'failed';
+      }
+      if (!suiteHandle.abortRequested) {
+        enqueueAnalysis(testRunId);
+      }
+    }
+  } catch (error) {
+    console.error(`[executor] Suite "${suiteRunId}" gagal:`, error);
+    suiteFinalStatus = 'error';
+  } finally {
+    if (screencast) {
+      await screencast.stop().catch(() => undefined);
+    }
+    if (context) {
+      await context.close().catch(() => undefined);
+    }
+    if (browser) {
+      await browser.close().catch(() => undefined);
+    }
+    if (suiteHandle.abortRequested) {
+      // Suite dihentikan paksa — tidak akan pernah lengkap, buang tracking
+      // supaya tidak menggantung selamanya menunggu id yang tidak akan datang.
+      discardSuiteAnalysisTracking(suiteRunId);
+    } else {
+      const finalized = sealSuiteAnalysisTracking(suiteRunId);
+      if (finalized) {
+        enqueueSuiteAnalysis(finalized.projectId, suiteRunId, finalized.testRunIds);
+      }
+    }
+    suiteHandles.delete(suiteRunId);
+  }
+
+  broadcastToRun(suiteRunId, {
+    type: 'run:suite-done',
+    runId: suiteRunId,
+    status: suiteFinalStatus,
+    results: suiteResults,
+  });
+  broadcastToRun(suiteRunId, {
+    type: 'run:status',
+    runId: suiteRunId,
+    status: suiteFinalStatus,
+  });
+
+  console.log(
+    `[executor] suite "${suiteRunId}" selesai status="${suiteFinalStatus}" (${suiteResults.length} test case, ${Date.now() - suiteStartedAt.getTime()}ms)`,
+  );
 }

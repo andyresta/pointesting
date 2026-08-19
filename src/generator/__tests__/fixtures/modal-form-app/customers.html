@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="utf-8" />
+    <title>Daftar Pelanggan</title>
+    <style>
+      .modal { display: none; position: fixed; inset: 0; background: rgb(0 0 0 / 40%); align-items: center; justify-content: center; }
+      .modal.open { display: flex; }
+      .modal-box { background: #fff; padding: 1rem; min-width: 320px; }
+    </style>
+    <script>
+      function openModal(id) {
+        document.getElementById(id)?.classList.add('open');
+      }
+      function closeModal(id) {
+        document.getElementById(id)?.classList.remove('open');
+      }
+    </script>
+  </head>
+  <body>
+    <h1>Daftar Pelanggan</h1>
+    <button id="btn-add" type="button" onclick="openModal('add-modal')">Tambah Pelanggan</button>
+    <div id="add-modal" class="modal" role="dialog">
+      <div class="modal-box">
+        <h2>Form Tambah Pelanggan</h2>
+        <label>Nama <input id="customer-name" name="name" placeholder="Nama pelanggan" /></label>
+        <label>Telepon <input id="customer-phone" name="phone" placeholder="No. telepon" /></label>
+        <button type="button" onclick="closeModal('add-modal')">Batal</button>
+        <button type="submit" id="btn-save">Simpan</button>
+      </div>
+    </div>
+  </body>
+</html>

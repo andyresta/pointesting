@@ -142,82 +142,33 @@
                 <span class="spinner spinner-small spinner-inline" aria-hidden="true" hidden></span>
               </button>
               <button
-                class="secondary-button instruction-button"
+                class="secondary-button instruction-button compact-icon-action"
                 type="button"
                 data-project-id="<%= project.id %>"
+                title="Instruction"
+                aria-label="Instruction"
               >Instruction</button>
-              <a
-                class="generate-script-button"
-                href="/dashboard/projects/<%= project.id %>/generate"
-                data-project-id="<%= project.id %>"
-              >
-                <span class="button-label">Generate Test Script</span>
-                <span class="spinner spinner-small" aria-hidden="true" hidden></span>
-              </a>
             </div>
           </div>
 
-          <% if (project.testCases.length === 0) { %>
-            <p class="muted project-empty">Belum ada test case. Simpan Instruction, lalu klik Generate Test Script, atau buat manual dari dialog Instruction.</p>
-          <% } %>
-
-          <% project.testCases.forEach((testCase) => { %>
-            <article
-              class="test-case"
-              data-test-case-id="<%= testCase.id %>"
-              data-project-id="<%= project.id %>"
-              data-test-case="<%= JSON.stringify({
-                id: testCase.id,
-                title: testCase.title,
-                description: testCase.description,
-                steps: testCase.steps,
-                expected: testCase.expected
-              }) %>"
-            >
-              <div class="test-case-row">
-                <div>
-                  <h3><%= testCase.title %></h3>
-                  <% if (testCase.description) { %>
-                    <p class="test-case-description"><%= testCase.description %></p>
-                  <% } %>
-                  <p class="muted"><%= Array.isArray(testCase.steps) ? testCase.steps.length : 0 %> langkah</p>
-                  <div class="latest-analysis-summary" <%= testCase.latestAnalysisResult ? '' : 'hidden' %>>
-                    <% if (testCase.latestAnalysisResult) { %>
-                      <span
-                        class="analysis-badge analysis-status-<%= testCase.latestAnalysisResult.status %>"
-                        data-latest-analysis-badge
-                      ><%= testCase.latestAnalysisResult.status %></span>
-                      <span class="latest-analysis-label">
-                        Analisis terakhir · <%= testCase.latestAnalysisResult.provider %>
-                      </span>
-                    <% } %>
-                  </div>
-                </div>
-                <div class="test-case-actions">
-                  <button class="secondary-button edit-test-case-button" type="button">Edit</button>
-                  <button class="run-button" type="button" data-test-case-id="<%= testCase.id %>">
-                    <span class="button-label">Run</span>
-                    <span class="spinner spinner-small" aria-hidden="true" hidden></span>
-                  </button>
-                </div>
-              </div>
-
-              <section class="run-panel" aria-live="polite" hidden>
-                <div class="run-panel-header">
-                  <strong>Live run</strong>
-                  <span class="status-badge status-queued">queued</span>
-                </div>
-                <div class="evidence-layout">
-                  <div class="run-content">
-                    <div class="live-placeholder">Menunggu frame browser…</div>
-                    <img class="live-frame" alt="Live browser view" hidden />
-                  </div>
-                  <aside class="analysis-panel" aria-live="polite" hidden></aside>
-                </div>
-                <ol class="step-events"></ol>
-              </section>
-            </article>
-          <% }); %>
+          <div class="project-card-footer">
+            <div class="project-quick-actions">
+              <button
+                class="primary-button compact-action ai-test-script-button"
+                type="button"
+                data-project-id="<%= project.id %>"
+                data-generate-url="/dashboard/projects/<%= project.id %>/generate"
+                data-test-case-count="<%= project.testCases.length %>"
+              >
+                <span class="button-label">Ai Test Script</span>
+                <span class="spinner spinner-small" aria-hidden="true" hidden></span>
+              </button>
+              <a
+                class="secondary-button compact-action test-cases-link"
+                href="/dashboard/projects/<%= project.id %>/test-cases"
+              >Test Case</a>
+            </div>
+          </div>
           </section>
         <% }); %>
         </div>
@@ -307,9 +258,6 @@
         <p class="alert form-error" hidden></p>
         <div class="dialog-actions">
           <button class="secondary-button" type="button" data-close-dialog>Batal</button>
-          <button id="manual-test-case-button" class="secondary-button" type="button">
-            Buat manual
-          </button>
           <button class="submit-button" type="submit">
             <span class="button-label">Simpan Instruction</span>
             <span class="spinner spinner-small" aria-hidden="true" hidden></span>
@@ -318,58 +266,28 @@
       </form>
     </dialog>
 
-    <dialog id="test-case-dialog" class="app-dialog app-dialog-wide">
-      <form id="test-case-form" class="dialog-form" hx-boost="false">
-        <input name="projectId" type="hidden" />
-        <input name="testCaseId" type="hidden" />
+    <dialog id="generate-replace-dialog" class="app-dialog">
+      <div class="dialog-form">
         <div class="dialog-header">
           <div>
-            <p class="eyebrow">Test Case</p>
-            <h2 id="test-case-dialog-title">Tambah Test Case</h2>
+            <p class="eyebrow">Generate AI</p>
+            <h2>Ganti test case yang ada?</h2>
           </div>
           <button class="icon-button" type="button" data-close-dialog aria-label="Tutup">×</button>
         </div>
-        <label>
-          Judul test case
-          <input name="title" required maxlength="160" autocomplete="off" />
-        </label>
-        <label>
-          Keterangan
-          <textarea
-            name="description"
-            rows="3"
-            maxlength="2000"
-            placeholder="Ringkas tujuan uji, misalnya: memastikan login valid membuka dashboard."
-          ></textarea>
-        </label>
-        <div class="form-section">
-          <div class="form-section-heading">
-            <div>
-              <h3>Langkah pengujian</h3>
-              <p class="field-hint">Langkah dijalankan berurutan dari atas ke bawah.</p>
-            </div>
-            <button id="add-step-button" class="secondary-button" type="button">Tambah Step</button>
-          </div>
-          <div id="step-list" class="step-builder"></div>
-        </div>
-        <label>
-          Expected result
-          <textarea
-            name="expected"
-            required
-            rows="4"
-            placeholder="Satu expected result per baris"
-          ></textarea>
-        </label>
-        <p class="alert form-error" hidden></p>
+        <p class="field-hint">
+          Project ini punya <strong id="generate-replace-count">0</strong> test case.
+          Ai Test Script akan <strong>mengganti semua</strong> test case yang ada dengan hasil generate baru.
+          Test run dan analisis terkait ikut terhapus.
+        </p>
         <div class="dialog-actions">
           <button class="secondary-button" type="button" data-close-dialog>Batal</button>
-          <button class="submit-button" type="submit">
-            <span class="button-label">Simpan Test Case</span>
+          <button id="generate-replace-confirm-button" class="primary-button" type="button">
+            <span class="button-label">Ganti &amp; Generate</span>
             <span class="spinner spinner-small" aria-hidden="true" hidden></span>
           </button>
         </div>
-      </form>
+      </div>
     </dialog>
   </body>
 </html>

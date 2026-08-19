@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Dashboard Backdrop</title>
+  </head>
+  <body>
+    <h1>Dashboard Backdrop</h1>
+    <nav>
+      <a id="nav-kendaraan" href="page-a.html">Kendaraan</a>
+      <a id="nav-pelanggan" href="page-b.html">Pelanggan</a>
+    </nav>
+    <div
+      id="promo-backdrop"
+      class="modal-backdrop"
+      style="position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5); z-index: 9999"
+    ></div>
+    <script>
+      document.getElementById('promo-backdrop').addEventListener('click', () => {
+        document.getElementById('promo-backdrop').remove();
+      });
+    </script>
+  </body>
+</html>

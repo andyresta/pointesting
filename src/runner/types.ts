@@ -1,10 +1,25 @@
 /**
  * Keterangan: Tipe satu step test case yang siap dieksekusi Playwright.
  * Bentuknya sama persis dengan `TestCaseStep` di
- * `src/api/schemas/testcase.schema.ts` (action goto/fill/click/check/select/waitFor)
- * — dipisah di sini agar `src/runner` tidak perlu bergantung ke layer API.
+ * `src/api/schemas/testcase.schema.ts` (action goto/fill/click/check/select/
+ * waitFor + grup assert* checkpoint: assertVisible/assertHidden/assertChecked/
+ * assertText/assertValue/assertCount/assertUrl) — dipisah di sini agar
+ * `src/runner` tidak perlu bergantung ke layer API.
  */
-export type StepAction = 'goto' | 'fill' | 'click' | 'check' | 'select' | 'waitFor';
+export type StepAction =
+  | 'goto'
+  | 'fill'
+  | 'click'
+  | 'check'
+  | 'select'
+  | 'waitFor'
+  | 'assertVisible'
+  | 'assertHidden'
+  | 'assertChecked'
+  | 'assertText'
+  | 'assertValue'
+  | 'assertCount'
+  | 'assertUrl';
 
 export interface GotoStep {
   action: 'goto';
@@ -38,7 +53,65 @@ export interface WaitForStep {
   selector: string;
 }
 
-export type Step = GotoStep | FillStep | ClickStep | CheckStep | SelectStep | WaitForStep;
+/** Keterangan: Checkpoint — elemen harus terlihat saat ini. */
+export interface AssertVisibleStep {
+  action: 'assertVisible';
+  selector: string;
+}
+
+/** Keterangan: Checkpoint — elemen harus tersembunyi/tidak ada saat ini. */
+export interface AssertHiddenStep {
+  action: 'assertHidden';
+  selector: string;
+}
+
+/** Keterangan: Checkpoint — checkbox/radio harus tercentang saat ini. */
+export interface AssertCheckedStep {
+  action: 'assertChecked';
+  selector: string;
+}
+
+/** Keterangan: Checkpoint — teks elemen harus mengandung `value`. */
+export interface AssertTextStep {
+  action: 'assertText';
+  selector: string;
+  value: string;
+}
+
+/** Keterangan: Checkpoint — nilai input harus persis sama dengan `value`. */
+export interface AssertValueStep {
+  action: 'assertValue';
+  selector: string;
+  value: string;
+}
+
+/** Keterangan: Checkpoint — jumlah elemen yang cocok selector harus sama dengan `value`. */
+export interface AssertCountStep {
+  action: 'assertCount';
+  selector: string;
+  value: string;
+}
+
+/** Keterangan: Checkpoint — URL halaman saat ini harus mengandung `value`. */
+export interface AssertUrlStep {
+  action: 'assertUrl';
+  value: string;
+}
+
+export type Step =
+  | GotoStep
+  | FillStep
+  | ClickStep
+  | CheckStep
+  | SelectStep
+  | WaitForStep
+  | AssertVisibleStep
+  | AssertHiddenStep
+  | AssertCheckedStep
+  | AssertTextStep
+  | AssertValueStep
+  | AssertCountStep
+  | AssertUrlStep;
 
 /**
  * Keterangan: Hasil eksekusi satu step — field-nya selaras dengan kolom

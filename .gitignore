@@ -7,3 +7,5 @@ storage/artifacts/*
 !storage/artifacts/.gitkeep
 storage/fixtures/*
 !storage/fixtures/.gitkeep
+.playwright-mcp/
+console-2026*

@@ -23,6 +23,7 @@ const TEST_CASE_COLUMNS = `
 `;
 
 interface TestCaseLatestAnalysisRow extends TestCase {
+  ctid?: unknown;
   analysisId: string | null;
   analysisTestRunId: string | null;
   analysisStatus: AnalysisStatus | null;
@@ -49,6 +50,7 @@ function mapLatestAnalysisRow(
     analysisSolution,
     analysisProvider,
     analysisCreatedAt,
+    ctid: _ctid,
     ...testCase
   } = row;
 
@@ -86,8 +88,8 @@ export class TestCaseRepository {
   async create(data: TestCaseCreateData, client?: PoolClient): Promise<TestCase> {
     const db = client ?? pool;
     const result = await db.query<TestCase>(
-      `INSERT INTO test_case (project_id, title, description, steps, expected, source)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO test_case (project_id, title, description, steps, expected, source, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, clock_timestamp())
        RETURNING ${TEST_CASE_COLUMNS}`,
       [
         data.projectId,
@@ -115,7 +117,8 @@ export class TestCaseRepository {
   }
 
   /**
-   * Keterangan: Mengambil test case dengan filter project dan source opsional.
+   * Keterangan: Mengambil test case dengan filter project dan source opsional,
+   * mengikuti urutan insert (row yang masuk lebih dulu tampil lebih dulu).
    */
   async findAll(filter: TestCaseFilter = {}): Promise<TestCase[]> {
     const conditions: string[] = [];
@@ -132,7 +135,7 @@ export class TestCaseRepository {
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     const result = await pool.query<TestCase>(
-      `SELECT ${TEST_CASE_COLUMNS} FROM test_case ${where} ORDER BY created_at DESC`,
+      `SELECT ${TEST_CASE_COLUMNS} FROM test_case ${where} ORDER BY created_at, ctid`,
       values,
     );
 
@@ -142,6 +145,7 @@ export class TestCaseRepository {
   /**
    * Keterangan: Mengambil seluruh test case satu project beserta satu hasil
    * analysis terbaru lintas run menggunakan LEFT JOIN LATERAL tanpa N+1 query.
+   * Urutan daftar mengikuti insert ke tabel (bukan DESC terbaru).
    */
   async findAllWithLatestAnalysis(
     projectId: string,
@@ -158,7 +162,7 @@ export class TestCaseRepository {
          latest_analysis.provider AS "analysisProvider",
          latest_analysis.created_at AS "analysisCreatedAt"
        FROM (
-         SELECT ${TEST_CASE_COLUMNS}
+         SELECT ${TEST_CASE_COLUMNS}, ctid
          FROM test_case
          WHERE project_id = $1
        ) AS test_case_row
@@ -171,7 +175,47 @@ export class TestCaseRepository {
          ORDER BY analysis_result.created_at DESC, analysis_result.id DESC
          LIMIT 1
        ) AS latest_analysis ON TRUE
-       ORDER BY test_case_row."createdAt" DESC`,
+       ORDER BY test_case_row."createdAt", test_case_row.ctid`,
+      [projectId],
+    );
+
+    return result.rows.map(mapLatestAnalysisRow);
+  }
+
+  /**
+   * Keterangan: Mengambil test case satu project beserta hasil analisis terbaru
+   * lintas run, dengan urutan baris fisik tabel (`ctid`) — selaras dengan
+   * `SELECT * FROM test_case WHERE project_id = ?` di klien SQL.
+   */
+  async findAllWithLatestAnalysisUnordered(
+    projectId: string,
+  ): Promise<TestCaseWithLatestAnalysis[]> {
+    const result = await pool.query<TestCaseLatestAnalysisRow>(
+      `SELECT
+         test_case_row.*,
+         latest_analysis.id AS "analysisId",
+         latest_analysis.test_run_id AS "analysisTestRunId",
+         latest_analysis.status AS "analysisStatus",
+         latest_analysis.reason AS "analysisReason",
+         latest_analysis.detail AS "analysisDetail",
+         latest_analysis.solution AS "analysisSolution",
+         latest_analysis.provider AS "analysisProvider",
+         latest_analysis.created_at AS "analysisCreatedAt"
+       FROM (
+         SELECT ${TEST_CASE_COLUMNS}, ctid
+         FROM test_case
+         WHERE project_id = $1
+       ) AS test_case_row
+       LEFT JOIN LATERAL (
+         SELECT analysis_result.*
+         FROM test_run
+         JOIN analysis_result
+           ON analysis_result.test_run_id = test_run.id
+         WHERE test_run.test_case_id = test_case_row.id
+         ORDER BY analysis_result.created_at DESC, analysis_result.id DESC
+         LIMIT 1
+       ) AS latest_analysis ON TRUE
+       ORDER BY test_case_row.ctid`,
       [projectId],
     );
 
@@ -209,6 +253,18 @@ export class TestCaseRepository {
     );
 
     return result.rows[0] ?? null;
+  }
+
+  /**
+   * Keterangan: Menghapus seluruh test case satu project (cascade ke test_run).
+   */
+  async deleteAllByProjectId(projectId: string, client?: PoolClient): Promise<number> {
+    const db = client ?? pool;
+    const result = await db.query(
+      'DELETE FROM test_case WHERE project_id = $1',
+      [projectId],
+    );
+    return result.rowCount ?? 0;
   }
 }
 

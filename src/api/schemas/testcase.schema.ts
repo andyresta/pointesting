@@ -12,6 +12,13 @@ export const TEST_CASE_ACTIONS = [
   'check',
   'select',
   'waitFor',
+  'assertVisible',
+  'assertHidden',
+  'assertChecked',
+  'assertText',
+  'assertValue',
+  'assertCount',
+  'assertUrl',
 ] as const;
 
 export type TestCaseAction = (typeof TEST_CASE_ACTIONS)[number];
@@ -24,6 +31,9 @@ const nonEmptyString = (field: string) =>
 /**
  * Keterangan: Schema satu step test case. Field wajib berbeda per action
  * (goto→url, fill/select→selector+value, click/check/waitFor→selector).
+ * Grup assert* adalah action checkpoint (memverifikasi state, tidak
+ * mengubah apa pun): assertVisible/assertHidden/assertChecked→selector,
+ * assertText/assertValue/assertCount→selector+value, assertUrl→value saja.
  * Field lain yang tidak relevan boleh diabaikan/dihilangkan.
  */
 export const testCaseStepSchema = z.discriminatedUnion(
@@ -54,6 +64,37 @@ export const testCaseStepSchema = z.discriminatedUnion(
     z.object({
       action: z.literal('waitFor'),
       selector: nonEmptyString('selector'),
+    }),
+    z.object({
+      action: z.literal('assertVisible'),
+      selector: nonEmptyString('selector'),
+    }),
+    z.object({
+      action: z.literal('assertHidden'),
+      selector: nonEmptyString('selector'),
+    }),
+    z.object({
+      action: z.literal('assertChecked'),
+      selector: nonEmptyString('selector'),
+    }),
+    z.object({
+      action: z.literal('assertText'),
+      selector: nonEmptyString('selector'),
+      value: nonEmptyString('value'),
+    }),
+    z.object({
+      action: z.literal('assertValue'),
+      selector: nonEmptyString('selector'),
+      value: nonEmptyString('value'),
+    }),
+    z.object({
+      action: z.literal('assertCount'),
+      selector: nonEmptyString('selector'),
+      value: nonEmptyString('value'),
+    }),
+    z.object({
+      action: z.literal('assertUrl'),
+      value: nonEmptyString('value'),
     }),
   ],
   {

@@ -35,7 +35,6 @@ async function prepareDashboardPage(page: Page): Promise<void> {
                       <video></video>
                       <a class="artifact-link">Download trace</a>
                     </div>
-                    <aside class="analysis-panel" hidden></aside>
                   </div>
                 </section>
               </article>
@@ -99,7 +98,7 @@ for (const status of [
 
     const panel = page.locator('.run-panel');
     await expect(
-      panel.locator(`.analysis-panel .analysis-status-${status}`),
+      panel.locator(`.run-result-panel .analysis-status-${status}`),
     ).toHaveText(status);
     await expect(panel.locator('.artifact-link')).toHaveText('Download trace');
     await expect(panel.locator('video')).toHaveCount(1);
@@ -108,17 +107,17 @@ for (const status of [
     ).toHaveText(status);
 
     if (status === 'success') {
-      await expect(panel.locator('.analysis-panel')).toContainText(
+      await expect(panel.locator('.run-result-panel')).toContainText(
         'Semua expected result terpenuhi.',
       );
-      await expect(panel.locator('.analysis-panel')).not.toContainText(
+      await expect(panel.locator('.run-result-panel')).not.toContainText(
         'Solusi',
       );
     } else {
-      await expect(panel.locator('.analysis-panel')).toContainText(
+      await expect(panel.locator('.run-result-panel')).toContainText(
         'Terjadi perbedaan terhadap expected result.',
       );
-      await expect(panel.locator('.analysis-panel')).toContainText(
+      await expect(panel.locator('.run-result-panel')).toContainText(
         'Periksa implementasi dan jalankan regression test.',
       );
     }

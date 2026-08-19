@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Test Case — <%= project.name %> — Pointesting</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+    <script src="/assets/dashboard.js" defer></script>
+  </head>
+  <body class="generate-layout-page">
+    <div id="page-loading" class="page-loading" aria-live="polite">
+      <span class="spinner" aria-hidden="true"></span>
+      <span>Memuat test case…</span>
+    </div>
+
+    <div id="dashboard-content" class="generate-shell" hidden>
+      <header class="navbar">
+        <div class="navbar-inner navbar-inner-wide">
+          <a class="navbar-brand" href="/dashboard">
+            <span class="brand-mark" aria-hidden="true">P</span>
+            <span class="brand-name">Pointesting</span>
+          </a>
+
+          <nav class="navbar-nav" aria-label="Navigasi utama">
+            <a class="nav-link" href="/dashboard">Dashboard</a>
+            <span class="nav-link nav-link-disabled" title="Segera hadir (Fase 3)">Test Generation</span>
+            <span class="nav-link nav-link-disabled" title="Segera hadir (Fase 4)">Self-Healing</span>
+            <span class="nav-link nav-link-disabled" title="Segera hadir (Fase 5)">Fixture</span>
+          </nav>
+
+          <div class="navbar-search">
+            <input
+              id="dashboard-search"
+              type="search"
+              placeholder="Cari project atau test case…"
+              aria-label="Cari project atau test case"
+              autocomplete="off"
+            />
+          </div>
+
+          <div class="navbar-user">
+            <button
+              id="user-menu-button"
+              class="user-menu-button"
+              type="button"
+              aria-haspopup="true"
+              aria-expanded="false"
+            >
+              <span class="user-avatar" id="user-avatar">··</span>
+              <span class="user-name" id="user-name">…</span>
+            </button>
+            <div class="user-menu" id="user-menu" hidden>
+              <button id="logout-button" class="user-menu-item" type="button">
+                <span class="button-label">Logout</span>
+                <span class="spinner spinner-small" aria-hidden="true" hidden></span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main
+        id="testcases-workspace"
+        class="generate-page-main"
+        data-project-id="<%= project.id %>"
+      >
+        <div class="generate-toolbar">
+          <div class="generate-toolbar-heading">
+            <h1 class="page-title"><%= project.name %></h1>
+            <% if (project.baseUrl) { %>
+              <span class="muted"><%= project.baseUrl %></span>
+            <% } %>
+          </div>
+          <div class="generate-toolbar-actions">
+            <button id="run-suite-button" class="primary-button" type="button">
+              <span class="button-label">Jalankan Semua (1 Session)</span>
+              <span class="spinner spinner-small" aria-hidden="true" hidden></span>
+            </button>
+            <button id="stop-run-button" class="secondary-button danger-button" type="button" disabled>
+              <span class="button-label">Stop</span>
+              <span class="spinner spinner-small" aria-hidden="true" hidden></span>
+            </button>
+            <button id="add-test-case-button" class="secondary-button" type="button">
+              Tambah Test Case
+            </button>
+            <a class="secondary-button" href="/dashboard">Kembali ke Dashboard</a>
+          </div>
+        </div>
+
+        <section class="generate-panel generate-panel-page run-workspace-panel" aria-live="polite">
+          <div class="run-panel-header">
+            <strong>Live run</strong>
+            <span class="status-badge status-queued">idle</span>
+          </div>
+          <div class="generate-layout">
+            <aside class="test-case-sidebar">
+              <button id="add-test-case-ai-button" class="secondary-button test-case-ai-add-button" type="button">
+                + Tambah Test Case (AI)
+              </button>
+
+              <div id="guided-generate-sidebar-panel" class="guided-generate-sidebar-panel" hidden>
+                <div class="guided-generate-sidebar-header">
+                  <h3>Tambah Test Case dengan AI</h3>
+                  <button id="guided-generate-sidebar-close" class="icon-button" type="button" aria-label="Batal">×</button>
+                </div>
+                <label>
+                  Deskripsikan alur pengujian
+                  <textarea
+                    id="guided-generate-sidebar-prompt"
+                    rows="5"
+                    placeholder="mis. buka menu pelanggan, klik tombol tambah, isi form pelanggan dan submit"
+                  ></textarea>
+                </label>
+                <button id="guided-generate-sidebar-run" class="primary-button" type="button">
+                  <span class="button-label">Jalankan AI</span>
+                  <span class="spinner spinner-small" aria-hidden="true" hidden></span>
+                </button>
+                <p class="field-hint">Lihat panel "Live run" di kanan untuk menonton AI bekerja.</p>
+                <ol class="generate-log-list guided-generate-log"></ol>
+              </div>
+
+              <form id="test-case-search-form" class="test-case-search">
+                <input
+                  id="test-case-search"
+                  type="search"
+                  placeholder="Cari test case…"
+                  aria-label="Cari test case"
+                  autocomplete="off"
+                />
+                <button class="secondary-button compact-test-case-action" type="submit">
+                  Cari
+                </button>
+              </form>
+              <p class="muted test-case-search-empty" hidden>Tidak ada test case yang cocok.</p>
+              <% if (testCases.length === 0) { %>
+                <p class="muted test-case-sidebar-empty">
+                  Belum ada test case. Generate dari Instruction atau tambah manual.
+                </p>
+              <% } %>
+              <ol class="test-case-list">
+                <% testCases.forEach((testCase) => { %>
+                  <li
+                    class="test-case test-case-item"
+                    data-test-case-id="<%= testCase.id %>"
+                    data-project-id="<%= project.id %>"
+                    data-test-case="<%= JSON.stringify({
+                      id: testCase.id,
+                      title: testCase.title,
+                      description: testCase.description,
+                      steps: testCase.steps,
+                      expected: testCase.expected
+                    }) %>"
+                  >
+                    <div class="test-case-item-head">
+                      <div>
+                        <h3><%= testCase.title %></h3>
+                        <% if (testCase.description) { %>
+                          <p class="test-case-description"><%= testCase.description %></p>
+                        <% } %>
+                        <p class="muted">
+                          <%= Array.isArray(testCase.steps) ? testCase.steps.length : 0 %> langkah
+                        </p>
+                        <div class="latest-analysis-summary" <%= testCase.latestAnalysisResult ? '' : 'hidden' %>>
+                          <% if (testCase.latestAnalysisResult) { %>
+                            <span
+                              class="analysis-badge analysis-status-<%= testCase.latestAnalysisResult.status %>"
+                              data-latest-analysis-badge
+                            ><%= testCase.latestAnalysisResult.status %></span>
+                            <span class="latest-analysis-label">
+                              Analisis terakhir · <%= testCase.latestAnalysisResult.provider %>
+                            </span>
+                          <% } %>
+                        </div>
+                      </div>
+                      <span class="status-badge test-case-run-badge status-queued" hidden>queued</span>
+                    </div>
+                    <ol class="step-events"></ol>
+                    <div class="test-case-item-actions">
+                      <button class="secondary-button compact-test-case-action edit-test-case-button" type="button">Edit</button>
+                      <button
+                        class="secondary-button compact-test-case-action replay-button"
+                        type="button"
+                        data-test-case-id="<%= testCase.id %>"
+                      >
+                        Putar Ulang
+                      </button>
+                      <button
+                        class="run-button compact-test-case-action"
+                        type="button"
+                        data-test-case-id="<%= testCase.id %>"
+                      >
+                        <span class="button-label">Run</span>
+                        <span class="spinner spinner-small" aria-hidden="true" hidden></span>
+                      </button>
+                    </div>
+                  </li>
+                <% }); %>
+              </ol>
+            </aside>
+            <div class="run-view-column">
+              <div class="generate-view run-view-panel">
+                <div class="live-placeholder">Menunggu tampilan Playwright…</div>
+                <img class="live-frame" alt="Live Playwright view" hidden />
+              </div>
+              <aside class="run-result-panel" hidden></aside>
+              <aside id="suite-analysis-panel" class="suite-analysis-panel" hidden></aside>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="test-case-dialog" class="app-dialog app-dialog-wide">
+      <form id="test-case-form" class="dialog-form" hx-boost="false">
+        <input name="projectId" type="hidden" />
+        <input name="testCaseId" type="hidden" />
+        <div class="dialog-header">
+          <div>
+            <p class="eyebrow">Test Case</p>
+            <h2 id="test-case-dialog-title">Tambah Test Case</h2>
+          </div>
+          <button class="icon-button" type="button" data-close-dialog aria-label="Tutup">×</button>
+        </div>
+
+        <div id="test-case-mode-toggle" class="test-case-mode-toggle" role="tablist">
+          <button type="button" class="mode-toggle-button is-active" data-mode="manual">Langkah manual</button>
+          <button type="button" class="mode-toggle-button" data-mode="ai-guided">Deskripsikan dengan AI</button>
+        </div>
+
+        <div id="test-case-manual-fields">
+          <label>
+            Judul test case
+            <input name="title" maxlength="160" autocomplete="off" />
+          </label>
+          <label>
+            Keterangan
+            <textarea
+              name="description"
+              rows="3"
+              maxlength="2000"
+              placeholder="Ringkas tujuan uji, misalnya: memastikan login valid membuka dashboard."
+            ></textarea>
+          </label>
+          <div class="form-section">
+            <div class="form-section-heading">
+              <div>
+                <h3>Langkah pengujian</h3>
+                <p class="field-hint">Langkah dijalankan berurutan dari atas ke bawah.</p>
+              </div>
+              <button id="add-step-button" class="secondary-button" type="button">Tambah Step</button>
+            </div>
+            <div id="step-list" class="step-builder"></div>
+          </div>
+          <label>
+            Expected result
+            <textarea
+              name="expected"
+              rows="4"
+              placeholder="Satu expected result per baris"
+            ></textarea>
+          </label>
+        </div>
+
+        <div id="guided-generate-panel" class="guided-generate-panel" hidden>
+          <label>
+            Deskripsikan alur pengujian
+            <textarea
+              id="guided-generate-prompt"
+              rows="4"
+              placeholder="mis. buka menu pelanggan, klik tombol tambah, isi form pelanggan dan submit"
+            ></textarea>
+          </label>
+          <button id="guided-generate-run-button" class="secondary-button" type="button">
+            <span class="button-label">Jalankan AI</span>
+            <span class="spinner spinner-small" aria-hidden="true" hidden></span>
+          </button>
+          <p class="field-hint">
+            AI akan membuka aplikasi sungguhan, mengikuti instruksi ini langkah demi langkah, lalu
+            menyimpan hasilnya sebagai test case baru begitu selesai.
+          </p>
+          <ol class="generate-log-list guided-generate-log"></ol>
+        </div>
+
+        <p class="alert form-error" hidden></p>
+        <div class="dialog-actions">
+          <button class="secondary-button" type="button" data-close-dialog>Batal</button>
+          <button class="submit-button" type="submit">
+            <span class="button-label">Simpan Test Case</span>
+            <span class="spinner spinner-small" aria-hidden="true" hidden></span>
+          </button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="video-preview-dialog" class="app-dialog video-preview-dialog" aria-labelledby="video-preview-dialog-title">
+      <div class="dialog-header">
+        <h2 id="video-preview-dialog-title">Rekaman Video</h2>
+        <button class="icon-button" type="button" data-close-dialog aria-label="Tutup">×</button>
+      </div>
+      <video id="video-preview-player" controls></video>
+    </dialog>
+
+    <dialog id="generate-auth-dialog" class="app-dialog generate-auth-dialog" aria-labelledby="generate-auth-dialog-title">
+      <form class="dialog-form generate-auth-form" method="dialog">
+        <div class="dialog-header">
+          <div>
+            <h2 id="generate-auth-dialog-title">Input autentikasi</h2>
+            <p class="generate-auth-message muted"></p>
+          </div>
+        </div>
+        <div class="generate-auth-fields"></div>
+        <div class="dialog-actions generate-auth-actions">
+          <button type="button" class="secondary-button generate-auth-skip">
+            Lewati zona ini
+          </button>
+          <button type="submit" class="primary-button generate-auth-submit">
+            <span class="button-label">Kirim &amp; lanjutkan</span>
+            <span class="spinner spinner-small" aria-hidden="true" hidden></span>
+          </button>
+        </div>
+        <p class="form-error generate-auth-error" hidden></p>
+      </form>
+    </dialog>
+  </body>
+</html>

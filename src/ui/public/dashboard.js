@@ -2,10 +2,59 @@ const token = sessionStorage.getItem('pointestingToken');
 const activeSockets = new Map();
 const pollTimers = new Map();
 const pendingAnalysisByRun = new Map();
+const suiteAnalysisTimers = new Map();
+let activeRunSessionId = null;
+let activeRunSessionProjectId = null;
 const TERMINAL_STATUSES = ['passed', 'failed', 'error'];
 const MAX_ANALYSIS_POLL_ATTEMPTS = 30;
+
+/**
+ * Keterangan: Mengambil container live view/replay dari panel run workspace
+ * (halaman test case) atau panel run inline lama bila masih ada.
+ */
+function getRunContentElement(panel) {
+  return panel.querySelector('.run-content') ?? panel.querySelector('.generate-view');
+}
+
+/**
+ * Keterangan: Mengambil elemen test case aktif di sidebar halaman test case.
+ */
+function findTestCaseItem(testCaseId) {
+  if (!testCaseId) {
+    return null;
+  }
+  return document.querySelector(`.test-case-item[data-test-case-id="${testCaseId}"]`);
+}
+
+/**
+ * Keterangan: Memperbarui badge status run per baris test case di sidebar.
+ */
+function updateTestCaseRunBadge(testCaseId, status) {
+  const item = findTestCaseItem(testCaseId);
+  const badge = item?.querySelector('.test-case-run-badge');
+  if (!badge) {
+    return;
+  }
+  badge.hidden = false;
+  badge.className = `status-badge test-case-run-badge status-${status}`;
+  badge.textContent = status;
+}
 const providerCatalogs = new Map();
-const STEP_ACTIONS = ['goto', 'fill', 'click', 'check', 'select', 'waitFor'];
+const STEP_ACTIONS = [
+  'goto',
+  'fill',
+  'click',
+  'check',
+  'select',
+  'waitFor',
+  'assertVisible',
+  'assertHidden',
+  'assertChecked',
+  'assertText',
+  'assertValue',
+  'assertCount',
+  'assertUrl',
+];
 const PROVIDER_LABELS = {
   claude: 'Claude',
   openai: 'OpenAI',
@@ -61,16 +110,138 @@ function setIconButtonLoading(button, isLoading) {
  * menjaga tombol disable selama test masih diproses.
  */
 function setRunButtonLoading(button, isLoading) {
+  if (!button) {
+    return;
+  }
   button.disabled = isLoading;
-  button.querySelector('.button-label').hidden = isLoading;
-  button.querySelector('.spinner').hidden = !isLoading;
+  const label = button.querySelector('.button-label');
+  const spinner = button.querySelector('.spinner');
+  if (label) {
+    label.hidden = isLoading;
+  }
+  if (spinner) {
+    spinner.hidden = !isLoading;
+  }
+}
+
+/**
+ * Keterangan: Mengaktifkan tombol Stop hanya saat ada run Playwright yang
+ * sedang berjalan di halaman test case.
+ */
+function setStopRunEnabled(enabled) {
+  const button = document.querySelector('#stop-run-button');
+  if (!button) {
+    return;
+  }
+  button.disabled = !enabled;
+  if (!enabled) {
+    setRunButtonLoading(button, false);
+  }
+}
+
+/**
+ * Keterangan: Mengambil panel HASIL RUN gabungan (bukti/video/log + AI
+ * Analysis jadi SATU panel, satu header, SATU tombol collapse) di bawah
+ * panel live Playwright — DIPISAH dari panel live view itu sendiri supaya
+ * selesai run tidak mengganti/reset live-frame yang sedang tampil (lihat
+ * resetRunEvidencePanel). Sebelumnya ini 2 aside terpisah (masing-masing
+ * header+toggle sendiri) — digabung jadi 1 supaya saat di-collapse, tinggi
+ * panel yang tersisa cuma SATU baris header, bukan dua, dan tidak menutupi
+ * panel live Playwright.
+ */
+function getRunResultPanel(panel) {
+  let panelEl = panel.querySelector('.run-result-panel');
+  if (!panelEl) {
+    panelEl = document.createElement('aside');
+    panelEl.className = 'run-result-panel';
+    panelEl.hidden = true;
+    const view = getRunContentElement(panel);
+    if (view?.parentElement) {
+      view.parentElement.insertBefore(panelEl, view.nextSibling);
+    } else {
+      panel.append(panelEl);
+    }
+  }
+
+  // Keterangan: testcases.ejs SUDAH merender `<aside class="run-result-panel"
+  // hidden>` kosong secara statis (supaya urutan DOM-nya benar sejak awal) —
+  // jadi cabang di atas sering menemukan elemen yang SUDAH ADA tapi belum
+  // punya skeleton header/body/section sama sekali. Bangun skeleton-nya di
+  // sini (idempoten, ditandai .panel-body) supaya kedua kasus (elemen baru
+  // dibuat vs elemen statis kosong) sama-sama berakhir dengan struktur yang
+  // sama.
+  if (!panelEl.querySelector('.panel-body')) {
+    const header = document.createElement('div');
+    header.className = 'run-result-header';
+    const title = document.createElement('strong');
+    title.textContent = 'Hasil Run';
+    const body = document.createElement('div');
+    body.className = 'panel-body';
+    const toggle = createPanelToggleButton(
+      () => body.hidden,
+      (collapsed) => {
+        body.hidden = collapsed;
+      },
+    );
+    header.append(title, toggle);
+
+    const artifactsSection = document.createElement('div');
+    artifactsSection.className = 'run-result-artifacts';
+    const analysisSection = document.createElement('div');
+    analysisSection.className = 'run-result-analysis';
+    body.append(artifactsSection, analysisSection);
+    panelEl.append(header, body);
+  }
+  return panelEl;
+}
+
+function getRunResultArtifactsSection(panel) {
+  const panelEl = getRunResultPanel(panel);
+  panelEl.hidden = false;
+  return panelEl.querySelector('.run-result-artifacts');
+}
+
+function getRunResultAnalysisSection(panel) {
+  const panelEl = getRunResultPanel(panel);
+  panelEl.hidden = false;
+  return panelEl.querySelector('.run-result-analysis');
+}
+
+/**
+ * Keterangan: Menampilkan rekaman video run di modal terpisah — TIDAK pernah
+ * menggantikan konten panel live Playwright (permintaan eksplisit: panel
+ * live view harus tetap menampilkan kondisi terakhirnya, video hanya
+ * ditonton lewat modal ini kalau user mau).
+ */
+function openVideoPreview(objectUrl) {
+  const dialog = document.querySelector('#video-preview-dialog');
+  const player = document.querySelector('#video-preview-player');
+  if (!dialog || !player) {
+    return;
+  }
+  player.src = objectUrl;
+  dialog.showModal();
+  dialog.addEventListener(
+    'close',
+    () => {
+      player.pause();
+      player.removeAttribute('src');
+      player.load();
+    },
+    { once: true },
+  );
 }
 
 /**
  * Keterangan: Mengubah teks dan warna indikator status run pada panel terkait.
  */
 function updateStatus(panel, status) {
-  const badge = panel.querySelector('.status-badge');
+  const badge =
+    panel.querySelector('.run-panel-header .status-badge') ??
+    panel.querySelector(':scope > .run-panel-header .status-badge');
+  if (!badge) {
+    return;
+  }
   badge.textContent = status;
   badge.className = `status-badge status-${status}`;
 }
@@ -79,10 +250,19 @@ function updateStatus(panel, status) {
  * Keterangan: Menambahkan event hasil step ke daftar progres pada panel run.
  */
 function appendStepEvent(panel, event) {
+  const host =
+    findTestCaseItem(event.testCaseId) ??
+    findTestCaseItem(panel.dataset.activeTestCaseId) ??
+    panel.closest('.test-case') ??
+    panel;
+  const list = host.querySelector('.step-events');
+  if (!list) {
+    return;
+  }
   const item = document.createElement('li');
   item.textContent = `Step ${event.stepIndex + 1} · ${event.action} · ${event.status}`;
   item.className = `step-${event.status}`;
-  panel.querySelector('.step-events').append(item);
+  list.append(item);
 }
 
 /**
@@ -132,6 +312,7 @@ function finishRunWatch(runId, panel, socket) {
   panel.dataset.finished = 'true';
   stopPolling(runId);
   pendingAnalysisByRun.delete(runId);
+  clearSuiteAnalysisTimer(runId);
   const currentSocket = socket ?? activeSockets.get(runId);
   if (currentSocket && currentSocket.readyState === WebSocket.OPEN) {
     currentSocket.send(JSON.stringify({ type: 'unsubscribe:run', runId }));
@@ -143,14 +324,43 @@ function finishRunWatch(runId, panel, socket) {
 }
 
 /**
+ * Keterangan: Mengakhiri watch satu test case dalam sesi persisten tanpa
+ * menutup socket live view sessionId.
+ */
+function finishCaseWatch(testRunId, panel, socket) {
+  panel.dataset.finished = 'true';
+  stopPolling(testRunId);
+  pendingAnalysisByRun.delete(testRunId);
+  const sessionId = panel.dataset.activeRunId;
+  const sessionSocket = socket ?? activeSockets.get(sessionId);
+  if (sessionSocket?.readyState === WebSocket.OPEN && testRunId) {
+    sessionSocket.send(JSON.stringify({ type: 'unsubscribe:run', runId: testRunId }));
+  }
+  panel.dataset.activeCaseRunId = '';
+  setStopRunEnabled(false);
+}
+
+/**
+ * Keterangan: Subscribe socket WS ke runId tambahan (testRunId dalam sesi).
+ */
+function subscribeSocketToRun(socket, runId) {
+  if (!socket || socket.readyState !== WebSocket.OPEN || !runId) {
+    return;
+  }
+  socket.send(JSON.stringify({ type: 'subscribe:run', runId }));
+}
+
+/**
  * Keterangan: Menampilkan spinner area analysis selama worker AI masih
  * memproses artifact setelah status browser sudah terminal.
  */
 function showAnalysisLoading(panel) {
-  const analysisPanel = panel.querySelector('.analysis-panel');
-  analysisPanel.hidden = false;
-  analysisPanel.className = 'analysis-panel analysis-loading';
-  analysisPanel.innerHTML =
+  const analysisSection = getRunResultAnalysisSection(panel);
+  if (!analysisSection) {
+    return;
+  }
+  analysisSection.className = 'run-result-analysis analysis-loading';
+  analysisSection.innerHTML =
     '<span class="spinner" aria-hidden="true"></span><span>Menunggu analisis AI…</span>';
 }
 
@@ -158,6 +368,30 @@ function showAnalysisLoading(panel) {
  * Keterangan: Menambahkan satu field label/value ke card analysis memakai
  * textContent agar output provider tidak dapat menyisipkan HTML.
  */
+/**
+ * Keterangan: Membuat tombol collapse/expand generik untuk panel bukti/
+ * analysis di bawah panel live Playwright — supaya panel yang panjang
+ * (video/log/analysis) bisa disembunyikan agar tidak menutupi live view,
+ * tanpa kehilangan datanya (cuma disembunyikan, bukan dihapus).
+ */
+function createPanelToggleButton(getCollapsed, setCollapsed) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'icon-button panel-toggle-button';
+  const sync = () => {
+    const collapsed = getCollapsed();
+    button.textContent = collapsed ? '▸' : '▾';
+    button.setAttribute('aria-label', collapsed ? 'Tampilkan panel' : 'Sembunyikan panel');
+    button.title = collapsed ? 'Tampilkan panel' : 'Sembunyikan panel';
+  };
+  button.addEventListener('click', () => {
+    setCollapsed(!getCollapsed());
+    sync();
+  });
+  sync();
+  return button;
+}
+
 function appendAnalysisField(container, label, value) {
   const field = document.createElement('div');
   field.className = 'analysis-field';
@@ -174,8 +408,16 @@ function appendAnalysisField(container, label, value) {
  * tanpa reload setelah event run:analysis diterima.
  */
 function updateLatestAnalysisSummary(panel, analysisResult) {
-  const testCase = panel.closest('.test-case');
+  const testCase =
+    findTestCaseItem(panel.dataset.activeTestCaseId) ??
+    panel.closest('.test-case');
+  if (!testCase) {
+    return;
+  }
   const summary = testCase.querySelector('.latest-analysis-summary');
+  if (!summary) {
+    return;
+  }
   summary.replaceChildren();
 
   const badge = document.createElement('span');
@@ -191,14 +433,21 @@ function updateLatestAnalysisSummary(panel, analysisResult) {
 }
 
 /**
+ * Keterangan: Mengecek apakah runId masih relevan untuk panel (session vs run tunggal).
+ */
+function isActiveRunForPanel(runId, panel) {
+  if (panel.dataset.replayMode === 'true' || panel.dataset.sessionMode === 'true') {
+    return panel.dataset.activeCaseRunId === runId;
+  }
+  return panel.dataset.activeRunId === runId;
+}
+
+/**
  * Keterangan: Merender kesimpulan AI hanya setelah video/trace siap pada panel
  * yang sama; event lebih cepat disimpan sementara sampai bukti tersedia.
  */
 function renderAnalysisResult(runId, panel, analysisResult, socket) {
-  if (
-    panel.dataset.activeRunId !== runId ||
-    panel.dataset.finished === 'true'
-  ) {
+  if (!isActiveRunForPanel(runId, panel) || panel.dataset.finished === 'true') {
     return;
   }
   if (panel.dataset.evidenceReady !== 'true') {
@@ -207,10 +456,12 @@ function renderAnalysisResult(runId, panel, analysisResult, socket) {
     return;
   }
 
-  const analysisPanel = panel.querySelector('.analysis-panel');
-  analysisPanel.replaceChildren();
-  analysisPanel.hidden = false;
-  analysisPanel.className = 'analysis-panel';
+  const analysisSection = getRunResultAnalysisSection(panel);
+  if (!analysisSection) {
+    return;
+  }
+  analysisSection.replaceChildren();
+  analysisSection.className = 'run-result-analysis';
 
   const header = document.createElement('div');
   header.className = 'analysis-header';
@@ -220,34 +471,38 @@ function renderAnalysisResult(runId, panel, analysisResult, socket) {
   badge.className = `analysis-badge analysis-status-${analysisResult.status}`;
   badge.textContent = analysisResult.status;
   header.append(title, badge);
-  analysisPanel.append(header);
+  analysisSection.append(header);
 
   const provider = document.createElement('p');
   provider.className = 'analysis-provider';
   provider.textContent = `Provider: ${analysisResult.provider}`;
-  analysisPanel.append(provider);
+  analysisSection.append(provider);
 
   if (analysisResult.status === 'success') {
     appendAnalysisField(
-      analysisPanel,
+      analysisSection,
       'Bukti keberhasilan',
       analysisResult.reason || 'Tidak ada reason dari provider.',
     );
   } else {
     appendAnalysisField(
-      analysisPanel,
+      analysisSection,
       'Detail / root cause',
       analysisResult.detail || 'Tidak ada detail dari provider.',
     );
     appendAnalysisField(
-      analysisPanel,
+      analysisSection,
       'Solusi',
       analysisResult.solution || 'Tidak ada solusi dari provider.',
     );
   }
 
   updateLatestAnalysisSummary(panel, analysisResult);
-  finishRunWatch(runId, panel, socket);
+  if (panel.dataset.sessionMode === 'true') {
+    finishCaseWatch(runId, panel, socket);
+  } else {
+    finishRunWatch(runId, panel, socket);
+  }
 }
 
 /**
@@ -255,11 +510,151 @@ function renderAnalysisResult(runId, panel, analysisResult, socket) {
  * terukur berhenti, tanpa menampilkan kesimpulan yang tidak punya bukti.
  */
 function renderAnalysisUnavailable(runId, panel, socket, message) {
-  const analysisPanel = panel.querySelector('.analysis-panel');
-  analysisPanel.hidden = false;
-  analysisPanel.className = 'analysis-panel analysis-unavailable';
-  analysisPanel.textContent = message;
-  finishRunWatch(runId, panel, socket);
+  const analysisSection = getRunResultAnalysisSection(panel);
+  if (!analysisSection) {
+    return;
+  }
+  analysisSection.className = 'run-result-analysis analysis-unavailable';
+  analysisSection.textContent = message;
+  if (panel.dataset.sessionMode === 'true') {
+    finishCaseWatch(runId, panel, socket);
+  } else {
+    finishRunWatch(runId, panel, socket);
+  }
+}
+
+const SUITE_ANALYSIS_WAIT_MS = 180000;
+
+/**
+ * Keterangan: Menghentikan timer tunggu Suite Analysis untuk satu suiteRunId
+ * (dipanggil saat hasil/error datang lebih cepat, atau socket ditutup).
+ */
+function clearSuiteAnalysisTimer(runId) {
+  const timer = suiteAnalysisTimers.get(runId);
+  if (timer) {
+    clearTimeout(timer);
+    suiteAnalysisTimers.delete(runId);
+  }
+}
+
+/**
+ * Keterangan: Menampilkan spinner menunggu hasil Suite Analysis (analisis
+ * lintas fitur) setelah suite run selesai, sebelum event suite:analysis tiba.
+ */
+function showSuiteAnalysisLoading() {
+  const panel = document.querySelector('#suite-analysis-panel');
+  if (!panel) {
+    return;
+  }
+  panel.hidden = false;
+  panel.className = 'suite-analysis-panel suite-analysis-loading';
+  panel.innerHTML =
+    '<span class="spinner" aria-hidden="true"></span><span>Menunggu analisis lintas fitur…</span>';
+}
+
+/**
+ * Keterangan: Menampilkan pesan Suite Analysis tidak tersedia (semua provider
+ * gagal, atau batas tunggu tercapai) tanpa membuat kesan analisis berhasil.
+ */
+function showSuiteAnalysisUnavailable(message) {
+  const panel = document.querySelector('#suite-analysis-panel');
+  if (!panel) {
+    return;
+  }
+  panel.hidden = false;
+  panel.className = 'suite-analysis-panel suite-analysis-unavailable';
+  panel.textContent = message;
+}
+
+/**
+ * Keterangan: Merender hasil Suite Analysis (ringkasan + daftar temuan
+ * lintas-fitur) memakai textContent per field agar output AI tidak dapat
+ * menyisipkan HTML.
+ */
+function renderSuiteAnalysisResult(result) {
+  const panel = document.querySelector('#suite-analysis-panel');
+  if (!panel || !result) {
+    return;
+  }
+  panel.replaceChildren();
+  panel.hidden = false;
+  panel.className = 'suite-analysis-panel';
+
+  const header = document.createElement('div');
+  header.className = 'suite-analysis-header';
+  const title = document.createElement('strong');
+  title.textContent = 'Analisis Lintas Fitur';
+  const badge = document.createElement('span');
+  badge.className = `analysis-badge suite-analysis-status-${result.status}`;
+  badge.textContent = result.status;
+  header.append(title, badge);
+  panel.append(header);
+
+  const provider = document.createElement('p');
+  provider.className = 'analysis-provider';
+  provider.textContent = `Provider: ${result.provider}`;
+  panel.append(provider);
+
+  if (result.summary) {
+    const summary = document.createElement('p');
+    summary.className = 'suite-analysis-summary';
+    summary.textContent = result.summary;
+    panel.append(summary);
+  }
+
+  const findings = Array.isArray(result.findings) ? result.findings : [];
+  if (findings.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'muted';
+    empty.textContent = 'Tidak ada temuan lintas-fitur berarti untuk suite run ini.';
+    panel.append(empty);
+    return;
+  }
+
+  const list = document.createElement('ul');
+  list.className = 'suite-analysis-findings';
+  for (const finding of findings) {
+    const item = document.createElement('li');
+    item.className = 'suite-finding';
+    const head = document.createElement('div');
+    head.className = 'suite-finding-head';
+    const categoryBadge = document.createElement('span');
+    categoryBadge.className = 'suite-finding-category';
+    categoryBadge.textContent = finding.category;
+    const titleEl = document.createElement('strong');
+    titleEl.textContent = finding.title;
+    head.append(categoryBadge, titleEl);
+    const detail = document.createElement('p');
+    detail.textContent = finding.detail;
+    item.append(head, detail);
+    if (Array.isArray(finding.relatedTestCases) && finding.relatedTestCases.length > 0) {
+      const related = document.createElement('p');
+      related.className = 'suite-finding-related';
+      related.textContent = `Terkait: ${finding.relatedTestCases.join(', ')}`;
+      item.append(related);
+    }
+    list.append(item);
+  }
+  panel.append(list);
+}
+
+/**
+ * Keterangan: Mengambil hasil Suite Analysis terbaru project saat halaman
+ * test case dimuat, supaya hasil sebelumnya tetap terlihat setelah reload
+ * (resync REST, sama seperti pola analysis per test case).
+ */
+async function loadLatestSuiteAnalysis(projectId) {
+  try {
+    const response = await fetch(`/projects/${projectId}/suite-analysis/latest`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await response.json();
+    if (response.ok && data.result) {
+      renderSuiteAnalysisResult(data.result);
+    }
+  } catch {
+    // Bukan bagian kritis alur halaman — diamkan bila gagal.
+  }
 }
 
 /**
@@ -284,15 +679,15 @@ async function createAuthenticatedArtifactLink(runId, artifact, label, filename)
 }
 
 /**
- * Keterangan: Mengambil detail run beserta artifact, lalu mengganti live frame
- * dengan video player dan tautan unduhan trace/console/network ketika status
- * terminal sudah diketahui dari WS atau resync REST.
+ * Keterangan: Mengambil detail run beserta artifact, lalu menampilkan tombol
+ * putar video (modal, lihat openVideoPreview) dan tautan unduhan
+ * trace/console/network di panel bukti TERPISAH di bawah panel live
+ * Playwright. Panel live view (live-frame/live-placeholder) SENGAJA TIDAK
+ * disentuh sama sekali di sini — permintaan eksplisit supaya kondisi
+ * terakhirnya tidak berganti begitu run selesai.
  */
 async function renderFinalArtifacts(runId, panel, button, socket) {
-  if (
-    panel.dataset.activeRunId !== runId ||
-    panel.dataset.finished === 'true'
-  ) {
+  if (!isActiveRunForPanel(runId, panel) || panel.dataset.finished === 'true') {
     return;
   }
   if (panel.dataset.artifactsRendered === 'true') {
@@ -307,13 +702,13 @@ async function renderFinalArtifacts(runId, panel, button, socket) {
   }
   panel.dataset.artifactsLoading = 'true';
 
-  const content = panel.querySelector('.run-content');
-  content.replaceChildren();
+  const artifactsSection = getRunResultArtifactsSection(panel);
+  artifactsSection.replaceChildren();
   const loading = document.createElement('div');
   loading.className = 'panel-loading';
   loading.innerHTML =
     '<span class="spinner" aria-hidden="true"></span><span>Memuat artifact…</span>';
-  content.append(loading);
+  artifactsSection.append(loading);
 
   try {
     const response = await fetch(`/test-runs/${runId}`, {
@@ -325,7 +720,13 @@ async function renderFinalArtifacts(runId, panel, button, socket) {
     }
 
     updateStatus(panel, data.status);
-    content.replaceChildren();
+    artifactsSection.replaceChildren();
+    const title = document.createElement('strong');
+    title.className = 'run-result-section-title';
+    title.textContent = 'Bukti Run';
+    artifactsSection.append(title);
+    const body = artifactsSection;
+
     const links = document.createElement('div');
     links.className = 'artifact-links';
 
@@ -356,17 +757,17 @@ async function renderFinalArtifacts(runId, panel, button, socket) {
         'Download video',
         'video.webm',
       );
-      const video = document.createElement('video');
-      video.controls = true;
-      video.preload = 'metadata';
-      video.src = videoAsset.objectUrl;
-      content.append(video);
-      links.append(videoAsset.link);
+      const playButton = document.createElement('button');
+      playButton.type = 'button';
+      playButton.className = 'secondary-button compact-test-case-action';
+      playButton.textContent = 'Putar Video';
+      playButton.addEventListener('click', () => openVideoPreview(videoAsset.objectUrl));
+      links.append(playButton, videoAsset.link);
     } else {
       const message = document.createElement('p');
       message.className = 'muted';
       message.textContent = 'Video tidak tersedia untuk run ini.';
-      content.append(message);
+      body.append(message);
     }
 
     for (const item of downloadables) {
@@ -384,7 +785,7 @@ async function renderFinalArtifacts(runId, panel, button, socket) {
     }
 
     if (links.childElementCount > 0) {
-      content.append(links);
+      body.append(links);
     }
 
     const hasEvidence = Boolean(videoArtifact || traceArtifact);
@@ -406,9 +807,14 @@ async function renderFinalArtifacts(runId, panel, button, socket) {
       renderAnalysisResult(runId, panel, analysisResult, socket);
     } else {
       showAnalysisLoading(panel);
+      stopPolling(runId);
+      const timer = setInterval(() => {
+        void syncRunStatus(runId, panel, button, socket).catch(() => undefined);
+      }, 2000);
+      pollTimers.set(runId, timer);
     }
   } catch (error) {
-    content.textContent =
+    artifactsSection.textContent =
       error instanceof Error ? error.message : 'Gagal mengambil artifact';
     renderAnalysisUnavailable(
       runId,
@@ -427,7 +833,10 @@ async function renderFinalArtifacts(runId, panel, button, socket) {
  * event WS yang terlewat tetap bisa menyelesaikan panel live view.
  */
 async function syncRunStatus(runId, panel, button, socket) {
-  if (panel.dataset.activeRunId !== runId || panel.dataset.finished === 'true') {
+  if (panel.dataset.finished === 'true') {
+    return;
+  }
+  if (!isActiveRunForPanel(runId, panel)) {
     return;
   }
 
@@ -468,24 +877,201 @@ async function syncRunStatus(runId, panel, button, socket) {
  * tetap menunggu bukti video/trace siap sebelum ditampilkan.
  */
 function handleRunEvent(event, runId, panel, button, socket) {
-  if (event.runId !== runId || panel.dataset.activeRunId !== runId) {
+  const activeRunId = panel.dataset.activeRunId;
+  const activeCaseRunId = panel.dataset.activeCaseRunId;
+  const isSessionMode = panel.dataset.sessionMode === 'true';
+  const matchesSession =
+    isSessionMode &&
+    (event.runId === activeRunId || event.runId === activeCaseRunId);
+  const matchesRun = event.runId === runId && activeRunId === runId;
+  if (!matchesSession && !matchesRun) {
     return;
   }
 
   if (event.type === 'run:frame') {
-    const image = panel.querySelector('.live-frame');
+    const content = getRunContentElement(panel);
+    const image = content?.querySelector('.live-frame') ?? panel.querySelector('.live-frame');
+    if (!image) {
+      return;
+    }
     image.src = `data:image/jpeg;base64,${event.frame}`;
     image.hidden = false;
-    panel.querySelector('.live-placeholder').hidden = true;
+    const placeholder =
+      content?.querySelector('.live-placeholder') ?? panel.querySelector('.live-placeholder');
+    if (placeholder) {
+      placeholder.hidden = true;
+    }
   } else if (event.type === 'run:step') {
     appendStepEvent(panel, event);
+  } else if (event.type === 'run:suite-case') {
+    updateTestCaseRunBadge(event.testCaseId, event.status);
+    if (event.status === 'running') {
+      panel.dataset.activeTestCaseId = event.testCaseId;
+      panel.dataset.activeCaseRunId = event.testRunId ?? '';
+      panel.dataset.finished = 'false';
+      findTestCaseItem(event.testCaseId)
+        ?.querySelector('.step-events')
+        ?.replaceChildren();
+    } else if (isSessionMode && TERMINAL_STATUSES.includes(event.status)) {
+      panel.dataset.activeCaseRunId = event.testRunId ?? panel.dataset.activeCaseRunId;
+      void renderFinalArtifacts(
+        event.testRunId ?? panel.dataset.activeCaseRunId,
+        panel,
+        button,
+        socket,
+      ).finally(() => {
+        setRunButtonLoading(button, false);
+        setStopRunEnabled(false);
+      });
+    }
+  } else if (event.type === 'run:suite-done') {
+    updateStatus(panel, event.status);
+    panel.dataset.finished = 'true';
+    panel.dataset.suiteMode = 'false';
+    if (button) {
+      setRunButtonLoading(button, false);
+    }
+    setStopRunEnabled(false);
+    stopPolling(runId);
+    const placeholder = getRunContentElement(panel)?.querySelector('.live-placeholder');
+    if (placeholder) {
+      placeholder.hidden = false;
+      placeholder.textContent = 'Suite selesai — pilih Putar Ulang pada test case untuk melihat rekaman.';
+    }
+    // Socket TIDAK langsung ditutup — Suite Analysis (lintas fitur) baru
+    // selesai setelah semua analisis individual tuntas, biasanya beberapa
+    // saat setelah suite run sendiri selesai. finishRunWatch dipanggil nanti
+    // saat suite:analysis/suite:analysis-error tiba, atau batas tunggu habis.
+    showSuiteAnalysisLoading();
+    clearSuiteAnalysisTimer(runId);
+    suiteAnalysisTimers.set(
+      runId,
+      setTimeout(() => {
+        showSuiteAnalysisUnavailable(
+          'Analisis lintas fitur belum tersedia dalam batas waktu tunggu.',
+        );
+        finishRunWatch(runId, panel, socket);
+      }, SUITE_ANALYSIS_WAIT_MS),
+    );
+  } else if (event.type === 'suite:analysis') {
+    clearSuiteAnalysisTimer(runId);
+    renderSuiteAnalysisResult(event.result);
+    finishRunWatch(runId, panel, socket);
+  } else if (event.type === 'suite:analysis-error') {
+    clearSuiteAnalysisTimer(runId);
+    showSuiteAnalysisUnavailable(event.message || 'Analisis lintas fitur gagal.');
+    finishRunWatch(runId, panel, socket);
   } else if (event.type === 'run:status') {
+    if (isSessionMode && event.runId === activeCaseRunId) {
+      updateStatus(panel, event.status);
+      if (TERMINAL_STATUSES.includes(event.status)) {
+        void renderFinalArtifacts(event.runId, panel, button, socket).finally(() => {
+          setRunButtonLoading(button, false);
+          setStopRunEnabled(false);
+        });
+      }
+      return;
+    }
     updateStatus(panel, event.status);
     if (TERMINAL_STATUSES.includes(event.status)) {
+      if (panel.dataset.suiteMode === 'true') {
+        return;
+      }
       void renderFinalArtifacts(runId, panel, button, socket);
     }
   } else if (event.type === 'run:analysis') {
-    renderAnalysisResult(runId, panel, event.analysisResult, socket);
+    renderAnalysisResult(event.runId, panel, event.analysisResult, socket);
+  }
+}
+
+/**
+ * Keterangan: Membuka koneksi WS persisten ke sessionId untuk live view antar
+ * run test case individual tanpa browser baru setiap klik Run.
+ */
+function watchRunSession(sessionId, panel) {
+  const previousRunId = panel.dataset.activeRunId;
+  if (previousRunId && previousRunId !== sessionId) {
+    closeSocketForRun(previousRunId);
+  }
+
+  panel.dataset.activeRunId = sessionId;
+  if (activeSockets.has(sessionId)) {
+    return activeSockets.get(sessionId);
+  }
+
+  const socket = new WebSocket(createWebSocketUrl());
+  activeSockets.set(sessionId, socket);
+
+  socket.addEventListener('open', () => {
+    socket.send(JSON.stringify({ type: 'subscribe:run', runId: sessionId }));
+  });
+  socket.addEventListener('message', (message) => {
+    try {
+      const event = JSON.parse(message.data);
+      const button = findTestCaseItem(panel.dataset.activeTestCaseId)?.querySelector(
+        '.run-button',
+      );
+      handleRunEvent(event, sessionId, panel, button, socket);
+    } catch {
+      // Event malformed diabaikan; koneksi tetap dipertahankan.
+    }
+  });
+  socket.addEventListener('close', () => {
+    activeSockets.delete(sessionId);
+  });
+
+  return socket;
+}
+
+/**
+ * Keterangan: Membuka sesi Playwright persisten untuk project halaman test case.
+ */
+async function ensureRunSession(projectId, panel) {
+  if (activeRunSessionId && activeRunSessionProjectId === projectId) {
+    watchRunSession(activeRunSessionId, panel);
+    return activeRunSessionId;
+  }
+
+  if (activeRunSessionId) {
+    await stopRunSession(activeRunSessionProjectId, activeRunSessionId);
+  }
+
+  const data = await requestJson(`/projects/${projectId}/test-runs/session`, 'POST', {});
+  if (!data.sessionId) {
+    throw new Error('Sesi run tidak mengembalikan sessionId');
+  }
+
+  activeRunSessionId = data.sessionId;
+  activeRunSessionProjectId = projectId;
+  panel.dataset.sessionMode = 'true';
+  panel.dataset.suiteMode = 'false';
+  watchRunSession(data.sessionId, panel);
+  return data.sessionId;
+}
+
+/**
+ * Keterangan: Menutup sesi Playwright persisten saat suite run atau user
+ * meninggalkan halaman test case.
+ */
+async function stopRunSession(projectId, sessionId) {
+  if (!projectId || !sessionId) {
+    return;
+  }
+
+  try {
+    await requestJson(
+      `/projects/${projectId}/test-runs/session/${sessionId}/stop`,
+      'POST',
+      {},
+    );
+  } catch {
+    // Sesi mungkin sudah ditutup server-side.
+  }
+
+  closeSocketForRun(sessionId);
+  if (activeRunSessionId === sessionId) {
+    activeRunSessionId = null;
+    activeRunSessionProjectId = null;
   }
 }
 
@@ -505,7 +1091,9 @@ function watchRun(runId, panel, button) {
 
   socket.addEventListener('open', () => {
     socket.send(JSON.stringify({ type: 'subscribe:run', runId }));
-    void syncRunStatus(runId, panel, button, socket).catch(() => undefined);
+    if (panel.dataset.suiteMode !== 'true') {
+      void syncRunStatus(runId, panel, button, socket).catch(() => undefined);
+    }
   });
   socket.addEventListener('message', (message) => {
     try {
@@ -520,7 +1108,10 @@ function watchRun(runId, panel, button) {
     if (panel.dataset.activeRunId !== runId || panel.dataset.finished === 'true') {
       return;
     }
-    const placeholder = panel.querySelector('.live-placeholder');
+    if (panel.dataset.suiteMode === 'true' || panel.dataset.sessionMode === 'true') {
+      return;
+    }
+    const placeholder = getRunContentElement(panel)?.querySelector('.live-placeholder');
     if (placeholder) {
       placeholder.textContent =
         'Koneksi live view terputus, menyinkronkan status…';
@@ -539,34 +1130,40 @@ function watchRun(runId, panel, button) {
   });
 
   stopPolling(runId);
-  const timer = setInterval(() => {
-    void syncRunStatus(runId, panel, button, activeSockets.get(runId) ?? null).catch(
-      () => undefined,
-    );
-  }, 2000);
-  pollTimers.set(runId, timer);
+  if (panel.dataset.suiteMode !== 'true') {
+    const timer = setInterval(() => {
+      void syncRunStatus(runId, panel, button, activeSockets.get(runId) ?? null).catch(
+        () => undefined,
+      );
+    }, 2000);
+    pollTimers.set(runId, timer);
+  }
 }
 
 /**
- * Keterangan: Mengembalikan area bukti dan analysis ke state awal agar tombol
- * Run dapat dipakai berulang pada test case yang sama tanpa elemen stale.
+ * Keterangan: Mengembalikan area bukti (video/log) dan analysis ke state awal
+ * agar tombol Run dapat dipakai berulang tanpa elemen stale dari run
+ * sebelumnya. Panel live Playwright (live-frame/live-placeholder) SENGAJA
+ * TIDAK disentuh di sini — kondisi terakhirnya (frame terakhir yang sempat
+ * tampil) dibiarkan apa adanya sampai frame run baru datang lewat run:frame,
+ * bukan direset ke placeholder kosong.
  */
 function resetRunEvidencePanel(panel) {
-  const content = panel.querySelector('.run-content');
-  content.replaceChildren();
-  const placeholder = document.createElement('div');
-  placeholder.className = 'live-placeholder';
-  placeholder.textContent = 'Menunggu frame browser…';
-  const image = document.createElement('img');
-  image.className = 'live-frame';
-  image.alt = 'Live browser view';
-  image.hidden = true;
-  content.append(placeholder, image);
-
-  const analysisPanel = panel.querySelector('.analysis-panel');
-  analysisPanel.replaceChildren();
-  analysisPanel.className = 'analysis-panel';
-  analysisPanel.hidden = true;
+  const resultPanel = panel.querySelector('.run-result-panel');
+  if (!resultPanel) {
+    return;
+  }
+  resultPanel.hidden = true;
+  resultPanel.querySelector('.run-result-artifacts')?.replaceChildren();
+  const analysisSection = resultPanel.querySelector('.run-result-analysis');
+  if (analysisSection) {
+    analysisSection.replaceChildren();
+    analysisSection.className = 'run-result-analysis';
+  }
+  const body = resultPanel.querySelector('.panel-body');
+  if (body) {
+    body.hidden = false;
+  }
 }
 
 /**
@@ -579,27 +1176,59 @@ async function startRun(button) {
   }
 
   const testCaseId = button.dataset.testCaseId;
-  const testCase = button.closest('.test-case');
-  const panel = testCase.querySelector('.run-panel');
-  let runStarted = false;
-
-  if (panel.dataset.activeRunId) {
-    closeSocketForRun(panel.dataset.activeRunId);
+  const workspace = document.querySelector('#testcases-workspace');
+  const panel =
+    workspace?.querySelector('.run-workspace-panel') ??
+    button.closest('.test-case')?.querySelector('.run-panel');
+  const projectId = workspace?.dataset.projectId;
+  if (!panel) {
+    return;
   }
+
+  let runStarted = false;
 
   setRunButtonLoading(button, true);
   panel.hidden = false;
   panel.dataset.finished = 'false';
+  panel.dataset.suiteMode = 'false';
+  panel.dataset.replayMode = 'false';
+  panel.dataset.activeTestCaseId = testCaseId;
+  panel.dataset.activeCaseRunId = '';
   panel.dataset.artifactsRendered = 'false';
   panel.dataset.artifactsLoading = 'false';
   panel.dataset.evidenceReady = 'false';
   panel.dataset.analysisPollAttempts = '0';
-  pendingAnalysisByRun.delete(panel.dataset.activeRunId);
+  pendingAnalysisByRun.delete(panel.dataset.activeCaseRunId);
   updateStatus(panel, 'queued');
-  panel.querySelector('.step-events').replaceChildren();
+  findTestCaseItem(testCaseId)?.querySelector('.step-events')?.replaceChildren();
   resetRunEvidencePanel(panel);
 
   try {
+    if (workspace && projectId) {
+      panel.dataset.sessionMode = 'true';
+      const sessionId = await ensureRunSession(projectId, panel);
+      const data = await requestJson(
+        `/projects/${projectId}/test-runs/session/${sessionId}/run`,
+        'POST',
+        { testCaseId },
+      );
+      if (!data.testRunId) {
+        throw new Error('Run sesi tidak mengembalikan testRunId');
+      }
+
+      panel.dataset.activeCaseRunId = data.testRunId;
+      const socket = watchRunSession(sessionId, panel);
+      subscribeSocketToRun(socket, data.testRunId);
+      setStopRunEnabled(true);
+      runStarted = true;
+      return;
+    }
+
+    if (panel.dataset.activeRunId) {
+      closeSocketForRun(panel.dataset.activeRunId);
+    }
+    panel.dataset.sessionMode = 'false';
+
     const response = await fetch(`/test-cases/${testCaseId}/run`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
@@ -613,12 +1242,201 @@ async function startRun(button) {
     watchRun(data.runId, panel, button);
   } catch (error) {
     updateStatus(panel, 'error');
-    panel.querySelector('.live-placeholder').textContent =
-      error instanceof Error ? error.message : 'Gagal menjalankan test case';
+    const placeholder = getRunContentElement(panel)?.querySelector('.live-placeholder');
+    if (placeholder) {
+      placeholder.textContent =
+        error instanceof Error ? error.message : 'Gagal menjalankan test case';
+    }
   } finally {
     if (!runStarted) {
       setRunButtonLoading(button, false);
+      setStopRunEnabled(false);
     }
+  }
+}
+
+/**
+ * Keterangan: Menjalankan seluruh test case project dalam satu sesi Playwright
+ * (cookie/session shared) dengan live view di panel kanan.
+ */
+async function startSuiteRun(button) {
+  if (button.disabled) {
+    return;
+  }
+
+  const workspace = document.querySelector('#testcases-workspace');
+  const panel = workspace?.querySelector('.run-workspace-panel');
+  const projectId = workspace?.dataset.projectId;
+  if (!workspace || !panel || !projectId) {
+    return;
+  }
+
+  const testCaseIds = [...workspace.querySelectorAll('.test-case-item')]
+    .map((item) => item.dataset.testCaseId)
+    .filter(Boolean);
+  if (testCaseIds.length === 0) {
+    window.alert('Belum ada test case untuk dijalankan.');
+    return;
+  }
+
+  if (activeRunSessionId) {
+    await stopRunSession(projectId, activeRunSessionId);
+    panel.dataset.sessionMode = 'false';
+  }
+
+  if (panel.dataset.activeRunId) {
+    closeSocketForRun(panel.dataset.activeRunId);
+  }
+
+  setSubmitButtonLoading(button, true);
+  panel.dataset.finished = 'false';
+  panel.dataset.suiteMode = 'true';
+  panel.dataset.replayMode = 'false';
+  panel.dataset.artifactsRendered = 'false';
+  panel.dataset.artifactsLoading = 'false';
+  panel.dataset.evidenceReady = 'false';
+  panel.dataset.analysisPollAttempts = '0';
+  updateStatus(panel, 'queued');
+  workspace.querySelectorAll('.test-case-item .step-events').forEach((list) => {
+    list.replaceChildren();
+  });
+  workspace.querySelectorAll('.test-case-run-badge').forEach((badge) => {
+    badge.hidden = true;
+  });
+  resetRunEvidencePanel(panel);
+  const suiteAnalysisPanel = document.querySelector('#suite-analysis-panel');
+  if (suiteAnalysisPanel) {
+    suiteAnalysisPanel.replaceChildren();
+    suiteAnalysisPanel.className = 'suite-analysis-panel';
+    suiteAnalysisPanel.hidden = true;
+  }
+
+  let runStarted = false;
+  try {
+    const data = await requestJson(
+      `/projects/${projectId}/test-cases/run-suite`,
+      'POST',
+      { testCaseIds },
+    );
+    if (!data.suiteRunId) {
+      throw new Error('Suite run tidak mengembalikan suiteRunId');
+    }
+    runStarted = true;
+    setStopRunEnabled(true);
+    watchRun(data.suiteRunId, panel, button);
+  } catch (error) {
+    updateStatus(panel, 'error');
+    panel.dataset.suiteMode = 'false';
+    const placeholder = getRunContentElement(panel)?.querySelector('.live-placeholder');
+    if (placeholder) {
+      placeholder.textContent =
+        error instanceof Error ? error.message : 'Gagal menjalankan suite';
+    }
+  } finally {
+    if (!runStarted) {
+      setSubmitButtonLoading(button, false);
+      setStopRunEnabled(false);
+    }
+  }
+}
+
+/**
+ * Keterangan: Menghentikan paksa run Playwright yang sedang aktif (satu test
+ * case di sesi persisten, atau suite) tanpa menunggu step selesai.
+ */
+async function abortActiveRun(button) {
+  if (button.disabled) {
+    return;
+  }
+
+  const workspace = document.querySelector('#testcases-workspace');
+  const panel = workspace?.querySelector('.run-workspace-panel');
+  const projectId = workspace?.dataset.projectId;
+  if (!workspace || !panel || !projectId) {
+    return;
+  }
+
+  setRunButtonLoading(button, true);
+  updateStatus(panel, 'error');
+  const placeholder = getRunContentElement(panel)?.querySelector('.live-placeholder');
+  if (placeholder) {
+    placeholder.hidden = false;
+    placeholder.textContent = 'Menghentikan run…';
+  }
+
+  try {
+    if (panel.dataset.suiteMode === 'true' && panel.dataset.activeRunId) {
+      await requestJson(
+        `/projects/${projectId}/test-cases/suite/${panel.dataset.activeRunId}/abort`,
+        'POST',
+        {},
+      );
+      return;
+    }
+    if (activeRunSessionId) {
+      await requestJson(
+        `/projects/${projectId}/test-runs/session/${activeRunSessionId}/abort`,
+        'POST',
+        {},
+      );
+    }
+  } catch (error) {
+    setRunButtonLoading(button, false);
+    setStopRunEnabled(false);
+    if (placeholder) {
+      placeholder.textContent =
+        error instanceof Error ? error.message : 'Gagal menghentikan run';
+    }
+  }
+}
+
+/**
+ * Keterangan: Memutar ulang rekaman (video/trace) run terakhir test case di
+ * panel kanan halaman test case.
+ */
+async function replayLatestRun(button) {
+  if (button.disabled) {
+    return;
+  }
+
+  const testCaseId = button.dataset.testCaseId;
+  const panel = document.querySelector('.run-workspace-panel');
+  if (!testCaseId || !panel) {
+    return;
+  }
+
+  button.disabled = true;
+  try {
+    const response = await fetch(`/test-cases/${testCaseId}/runs`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const runs = await response.json();
+    if (!response.ok) {
+      throw new Error(runs.error ?? 'Gagal mengambil riwayat run');
+    }
+    if (!Array.isArray(runs) || runs.length === 0) {
+      window.alert('Belum ada rekaman run untuk test case ini.');
+      return;
+    }
+
+    const latestRun =
+      runs.find((item) => TERMINAL_STATUSES.includes(item.status)) ?? runs[0];
+    panel.dataset.finished = 'false';
+    panel.dataset.suiteMode = 'false';
+    panel.dataset.replayMode = 'true';
+    panel.dataset.activeTestCaseId = testCaseId;
+    panel.dataset.activeCaseRunId = latestRun.id;
+    panel.dataset.artifactsRendered = 'false';
+    panel.dataset.artifactsLoading = 'false';
+    panel.dataset.evidenceReady = 'false';
+    updateStatus(panel, latestRun.status);
+    resetRunEvidencePanel(panel);
+    await renderFinalArtifacts(latestRun.id, panel, button, null);
+    panel.dataset.finished = 'true';
+  } catch (error) {
+    window.alert(error instanceof Error ? error.message : 'Gagal memutar rekaman');
+  } finally {
+    button.disabled = false;
   }
 }
 
@@ -680,7 +1498,205 @@ function resetGeneratePanel(panel) {
     image.hidden = true;
     image.removeAttribute('src');
   }
+  hideAuthInputPanel(panel);
   updateStatus(panel, 'queued');
+}
+
+/**
+ * Keterangan: Mengembalikan elemen dialog input auth (modal backdrop).
+ */
+function getAuthInputDialog() {
+  return document.querySelector('#generate-auth-dialog');
+}
+
+/**
+ * Keterangan: Menyembunyikan modal input auth dinamis.
+ */
+function hideAuthInputPanel(_panel) {
+  const dialog = getAuthInputDialog();
+  if (!dialog) {
+    return;
+  }
+  if (dialog.open) {
+    dialog.close();
+  }
+  dialog.dataset.zoneId = '';
+  const form = dialog.querySelector('.generate-auth-form');
+  form?.reset();
+  const error = dialog.querySelector('.generate-auth-error');
+  if (error) {
+    error.hidden = true;
+    error.textContent = '';
+  }
+  const fieldsHost = dialog.querySelector('.generate-auth-fields');
+  fieldsHost?.replaceChildren();
+}
+
+/**
+ * Keterangan: Menampilkan modal input auth dinamis dari event generate:need-input.
+ */
+function showAuthInputPanel(panel, event) {
+  const dialog = getAuthInputDialog();
+  if (!dialog) {
+    return;
+  }
+  dialog.dataset.zoneId = event.zoneId;
+  const message = dialog.querySelector('.generate-auth-message');
+  if (message) {
+    message.textContent =
+      event.message ||
+      `Input autentikasi diperlukan untuk "${event.pageTitle || event.pageUrl}"`;
+  }
+  const fieldsHost = dialog.querySelector('.generate-auth-fields');
+  if (!fieldsHost) {
+    return;
+  }
+  fieldsHost.replaceChildren();
+  for (const field of event.fields ?? []) {
+    const wrap = document.createElement('div');
+    wrap.className = 'generate-auth-field';
+    const label = document.createElement('label');
+    label.textContent = field.label || field.key;
+    label.setAttribute('for', `auth-field-${field.key}`);
+    const input = document.createElement('input');
+    input.id = `auth-field-${field.key}`;
+    input.name = field.key;
+    input.type = field.secret ? 'password' : field.inputType || 'text';
+    input.required = true;
+    input.autocomplete = field.secret ? 'off' : 'username';
+    wrap.append(label, input);
+    fieldsHost.append(wrap);
+  }
+  if (!dialog.dataset.cancelWired) {
+    dialog.dataset.cancelWired = 'true';
+    dialog.addEventListener('cancel', (cancelEvent) => {
+      cancelEvent.preventDefault();
+    });
+  }
+  if (!dialog.open) {
+    dialog.showModal();
+  }
+  const firstInput = fieldsHost.querySelector('input');
+  firstInput?.focus();
+  appendGenerateLog(
+    panel,
+    'Menunggu input autentikasi untuk melanjutkan eksplorasi…',
+    'active',
+  );
+}
+
+/**
+ * Keterangan: Mengirim input auth dinamis ke backend agar job generate lanjut.
+ */
+async function submitAuthInputForm(panel, projectId, generateId, zoneId, values) {
+  const dialog = getAuthInputDialog();
+  const submitButton = dialog?.querySelector('.generate-auth-submit');
+  const skipButton = dialog?.querySelector('.generate-auth-skip');
+  const errorEl = dialog?.querySelector('.generate-auth-error');
+  if (submitButton) {
+    setSubmitButtonLoading(submitButton, true);
+  }
+  if (skipButton) {
+    skipButton.disabled = true;
+  }
+  if (errorEl) {
+    errorEl.hidden = true;
+    errorEl.textContent = '';
+  }
+  try {
+    await requestJson(
+      `/projects/${projectId}/generate/${generateId}/auth-input`,
+      'POST',
+      { zoneId, values },
+    );
+    hideAuthInputPanel(panel);
+    appendGenerateLog(panel, 'Input autentikasi diterima, melanjutkan eksplorasi…', 'done');
+  } catch (error) {
+    if (errorEl) {
+      errorEl.textContent =
+        error instanceof Error ? error.message : 'Gagal mengirim input autentikasi';
+      errorEl.hidden = false;
+    }
+  } finally {
+    if (submitButton) {
+      setSubmitButtonLoading(submitButton, false);
+    }
+    if (skipButton) {
+      skipButton.disabled = false;
+    }
+  }
+}
+
+/**
+ * Keterangan: Melewati zona auth yang terkunci tanpa menghentikan seluruh job.
+ */
+async function skipAuthInputZone(panel, projectId, generateId, zoneId) {
+  const dialog = getAuthInputDialog();
+  const submitButton = dialog?.querySelector('.generate-auth-submit');
+  const skipButton = dialog?.querySelector('.generate-auth-skip');
+  if (skipButton) {
+    setSubmitButtonLoading(skipButton, true);
+  }
+  if (submitButton) {
+    submitButton.disabled = true;
+  }
+  try {
+    await requestJson(
+      `/projects/${projectId}/generate/${generateId}/auth-input`,
+      'POST',
+      { zoneId, values: {}, skip: true },
+    );
+    hideAuthInputPanel(panel);
+    appendGenerateLog(panel, 'Zona autentikasi dilewati, melanjutkan bagian lain…', 'done');
+  } catch (error) {
+    appendGenerateLog(
+      panel,
+      error instanceof Error ? error.message : 'Gagal melewati zona auth',
+      'error',
+    );
+  } finally {
+    if (skipButton) {
+      setSubmitButtonLoading(skipButton, false);
+    }
+    if (submitButton) {
+      submitButton.disabled = false;
+    }
+  }
+}
+
+/**
+ * Keterangan: Wire form auth dinamis di panel generate (submit + skip).
+ */
+function wireAuthInputPanel(panel, projectId, generateId) {
+  const dialog = getAuthInputDialog();
+  const form = dialog?.querySelector('.generate-auth-form');
+  const skipButton = dialog?.querySelector('.generate-auth-skip');
+  if (!form || form.dataset.wired === 'true') {
+    return;
+  }
+  form.dataset.wired = 'true';
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const zoneId = dialog?.dataset.zoneId;
+    if (!zoneId) {
+      return;
+    }
+    const values = {};
+    const inputs = form.querySelectorAll('input[name]');
+    for (const input of inputs) {
+      if (input instanceof HTMLInputElement && input.name) {
+        values[input.name] = input.value;
+      }
+    }
+    void submitAuthInputForm(panel, projectId, generateId, zoneId, values);
+  });
+  skipButton?.addEventListener('click', () => {
+    const zoneId = dialog?.dataset.zoneId;
+    if (!zoneId) {
+      return;
+    }
+    void skipAuthInputZone(panel, projectId, generateId, zoneId);
+  });
 }
 
 /**
@@ -706,6 +1722,9 @@ function handleGenerateEvent(event, generateId, panel) {
   } else if (event.type === 'generate:status') {
     updateStatus(panel, event.phase === 'done' ? 'passed' : 'running');
     appendGenerateLog(panel, event.message, 'active');
+  } else if (event.type === 'generate:need-input') {
+    updateStatus(panel, 'running');
+    showAuthInputPanel(panel, event);
   } else if (event.type === 'generate:done') {
     updateStatus(panel, 'passed');
     appendGeneratedTestCases(panel, event.testCases ?? []);
@@ -778,17 +1797,45 @@ function startGenerate(projectId, generateId) {
   panel.hidden = false;
   resetGeneratePanel(panel);
   appendGenerateLog(panel, 'Menunggu Playwright…', 'active');
+  wireAuthInputPanel(panel, projectId, generateId);
   watchGenerate(generateId, panel);
 }
 
 /**
+ * Keterangan: Mengambil kartu project dari tombol aksi footer atau id project.
+ */
+function findProjectCard(projectId, button) {
+  return (
+    button?.closest('.project-card') ??
+    document.querySelector(`.project-card[data-project-id="${projectId}"]`)
+  );
+}
+
+/**
+ * Keterangan: Menghitung jumlah test case project dari dataset tombol atau badge kartu.
+ */
+function getProjectTestCaseCount(button, card) {
+  if (button?.dataset?.testCaseCount !== undefined) {
+    const fromButton = Number(button.dataset.testCaseCount);
+    return Number.isFinite(fromButton) ? fromButton : 0;
+  }
+  const fromBadge = Number(card?.querySelector('.count')?.textContent?.match(/\d+/)?.[0] ?? '');
+  return Number.isFinite(fromBadge) ? fromBadge : 0;
+}
+
+/**
  * Keterangan: Membuka halaman generate full-width bila instruction sudah
- * tersimpan; jika belum, minta user menyimpan Instruction dulu.
+ * tersimpan; jika belum, minta user menyimpan Instruction dulu. Bila project
+ * sudah punya test case, konfirmasi replace dulu.
  */
 function startGenerateFromProject(event) {
+  event.preventDefault();
   const button = event.currentTarget;
   const projectId = button.dataset.projectId;
-  const card = button.closest('.project-card');
+  const targetUrl =
+    button.dataset.generateUrl || `/dashboard/projects/${projectId}/generate`;
+  const card = findProjectCard(projectId, button);
+  const testCaseCount = getProjectTestCaseCount(button, card);
   let project = {};
   try {
     project = JSON.parse(card?.dataset.project || '{}');
@@ -796,9 +1843,49 @@ function startGenerateFromProject(event) {
     project = {};
   }
   if (!project.instruction?.trim()) {
-    event.preventDefault();
-    window.alert('Simpan Instruction dulu lewat tombol Instruction.');
+    openInstructionDialog(projectId);
+    return;
   }
+  if (testCaseCount > 0) {
+    openGenerateReplaceDialog(projectId, testCaseCount, targetUrl);
+    return;
+  }
+  window.location.href = targetUrl;
+}
+
+/**
+ * Keterangan: Modal konfirmasi sebelum Ai Test Script mengganti seluruh test
+ * case project yang sudah ada.
+ */
+function openGenerateReplaceDialog(projectId, testCaseCount, targetUrl) {
+  const dialog = document.querySelector('#generate-replace-dialog');
+  if (!dialog) {
+    sessionStorage.setItem('generateReplaceExisting', '1');
+    window.location.href = targetUrl;
+    return;
+  }
+  const countEl = dialog.querySelector('#generate-replace-count');
+  if (countEl) {
+    countEl.textContent = String(testCaseCount);
+  }
+  dialog.dataset.projectId = projectId;
+  dialog.dataset.targetUrl = targetUrl;
+  dialog.showModal();
+}
+
+/**
+ * Keterangan: Melanjutkan ke halaman generate dengan flag replace existing.
+ */
+function confirmGenerateReplace() {
+  const dialog = document.querySelector('#generate-replace-dialog');
+  const button = dialog?.querySelector('#generate-replace-confirm-button');
+  const targetUrl = dialog?.dataset.targetUrl;
+  if (!dialog || !targetUrl) {
+    return;
+  }
+  setSubmitButtonLoading(button, true);
+  sessionStorage.setItem('generateReplaceExisting', '1');
+  window.location.href = targetUrl;
 }
 
 /**
@@ -1202,6 +2289,12 @@ function renderStepFields(row, step = {}) {
     );
     return;
   }
+  if (action === 'assertUrl') {
+    fields.append(
+      createStepField('value', 'URL / potongan URL', step.value, '/dashboard'),
+    );
+    return;
+  }
   fields.append(
     createStepField(
       'selector',
@@ -1210,7 +2303,13 @@ function renderStepFields(row, step = {}) {
       '[data-testid="submit"]',
     ),
   );
-  if (action === 'fill' || action === 'select') {
+  if (
+    action === 'fill' ||
+    action === 'select' ||
+    action === 'assertText' ||
+    action === 'assertValue' ||
+    action === 'assertCount'
+  ) {
     fields.append(
       createStepField('value', 'Value', step.value, 'Nilai input'),
     );
@@ -1327,6 +2426,9 @@ function collectSteps() {
       if (action === 'goto') {
         return { action, url: row.querySelector('[name="url"]').value.trim() };
       }
+      if (action === 'assertUrl') {
+        return { action, value: row.querySelector('[name="value"]').value.trim() };
+      }
       const step = {
         action,
         selector: row.querySelector('[name="selector"]').value.trim(),
@@ -1395,8 +2497,46 @@ function openInstructionDialog(projectId) {
 }
 
 /**
+ * Keterangan: Mengganti mode dialog test case antara "Langkah manual" dan
+ * "Deskripsikan dengan AI" — title/expected hanya wajib diisi di mode
+ * manual (mode AI menyimpan sendiri lewat endpoint guided-generate, bukan
+ * lewat submit form utama).
+ */
+function setTestCaseDialogMode(mode) {
+  const dialog = document.querySelector('#test-case-dialog');
+  if (!dialog) {
+    return;
+  }
+  dialog.dataset.mode = mode;
+  dialog.querySelectorAll('.mode-toggle-button').forEach((button) => {
+    button.classList.toggle('is-active', button.dataset.mode === mode);
+  });
+  const form = document.querySelector('#test-case-form');
+  const manualFields = document.querySelector('#test-case-manual-fields');
+  const guidedPanel = document.querySelector('#guided-generate-panel');
+  const submitButton = form?.querySelector('.submit-button');
+  const isGuided = mode === 'ai-guided';
+  if (manualFields) {
+    manualFields.hidden = isGuided;
+  }
+  if (guidedPanel) {
+    guidedPanel.hidden = !isGuided;
+  }
+  if (submitButton) {
+    submitButton.hidden = isGuided;
+  }
+  if (form) {
+    form.elements.title.required = !isGuided;
+    form.elements.expected.required = !isGuided;
+  }
+}
+
+/**
  * Keterangan: Membuka form test case untuk mode create atau edit dan mengisi
- * builder dari data test case yang sudah ada.
+ * builder dari data test case yang sudah ada. Toggle "Deskripsikan dengan AI"
+ * tersedia untuk KEDUA mode — mengedit lewat AI berarti AI menjalankan ulang
+ * browser sungguhan dari awal (bukan sekadar menulis ulang JSON) lalu
+ * meng-update test case ini (lihat startGuidedGenerate/testCaseId).
  */
 function openTestCaseDialog(projectId, testCase = null) {
   const dialog = document.querySelector('#test-case-dialog');
@@ -1414,6 +2554,17 @@ function openTestCaseDialog(projectId, testCase = null) {
     ? 'Edit Test Case'
     : 'Tambah Test Case';
 
+  setTestCaseDialogMode('manual');
+  const guidedPrompt = document.querySelector('#guided-generate-prompt');
+  if (guidedPrompt) {
+    guidedPrompt.value = '';
+    guidedPrompt.placeholder = testCase
+      ? `Deskripsikan perubahan yang diinginkan, mis. "tambahkan pengisian field email juga" (mengedit: ${testCase.title})`
+      : 'mis. buka menu pelanggan, klik tombol tambah, isi form pelanggan dan submit';
+  }
+  const guidedLog = document.querySelector('.guided-generate-log');
+  guidedLog?.replaceChildren();
+
   const stepList = document.querySelector('#step-list');
   stepList.replaceChildren();
   const steps =
@@ -1426,6 +2577,220 @@ function openTestCaseDialog(projectId, testCase = null) {
   refreshStepRows();
   dialog.showModal();
   form.elements.title.focus();
+}
+
+/**
+ * Keterangan: Menghentikan (abort) guided generate yang masih berjalan di
+ * panel/modal yang ditutup — dipanggil saat user menutup UI SEBELUM AI
+ * selesai, supaya sesi browser langsung bisa dipakai lagi (bukan cuma
+ * disembunyikan sementara job tetap sibuk di server).
+ */
+async function abortGuidedGenerateIfActive(panel, projectId) {
+  if (!panel) {
+    return;
+  }
+  const generateId = panel.dataset.activeGenerateId;
+  if (!generateId || panel.dataset.finished === 'true') {
+    return;
+  }
+  panel.dataset.finished = 'true';
+  closeSocketForRun(generateId);
+  if (activeRunSessionId) {
+    await fetch(
+      `/projects/${projectId}/test-runs/session/${activeRunSessionId}/abort`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: '{}',
+        keepalive: true,
+      },
+    ).catch(() => undefined);
+  }
+}
+
+/**
+ * Keterangan: Membuka panel "Tambah Test Case dengan AI" di sidebar —
+ * menyembunyikan pencarian/daftar test case sementara, lalu memastikan
+ * sesi browser persisten sudah siap (dibuat kalau belum ada).
+ */
+async function openGuidedGenerateSidebarPanel(projectId, runPanel) {
+  const sidebarPanel = document.querySelector('#guided-generate-sidebar-panel');
+  const searchForm = document.querySelector('#test-case-search-form');
+  const list = document.querySelector('.test-case-list');
+  const emptyMessage = document.querySelector('.test-case-sidebar-empty');
+  if (sidebarPanel) {
+    sidebarPanel.hidden = false;
+  }
+  if (searchForm) {
+    searchForm.hidden = true;
+  }
+  if (list) {
+    list.hidden = true;
+  }
+  if (emptyMessage) {
+    emptyMessage.hidden = true;
+  }
+  document.querySelector('#guided-generate-sidebar-prompt')?.focus();
+  try {
+    await ensureRunSession(projectId, runPanel);
+  } catch {
+    // Error ditangani/ditampilkan saat tombol "Jalankan AI" diklik.
+  }
+}
+
+/**
+ * Keterangan: Menutup panel sidebar AI — abort job aktif (bila ada), lalu
+ * kembalikan tampilan pencarian/daftar test case seperti semula.
+ */
+async function closeGuidedGenerateSidebarPanel(projectId) {
+  const sidebarPanel = document.querySelector('#guided-generate-sidebar-panel');
+  await abortGuidedGenerateIfActive(sidebarPanel, projectId);
+  if (sidebarPanel) {
+    sidebarPanel.hidden = true;
+  }
+  document.querySelector('#test-case-search-form')?.removeAttribute('hidden');
+  document.querySelector('.test-case-list')?.removeAttribute('hidden');
+}
+
+/**
+ * Keterangan: Memicu guided single-flow generate (Tambah Test Case via
+ * prompt AI) — dijalankan di DALAM sesi Playwright persisten yang sudah ada
+ * di panel "Live run" kanan (ensureRunSession), BUKAN browser baru. Dipakai
+ * dari DUA entry point (toggle AI di modal, dan panel sidebar baru) lewat
+ * parameter `elements` supaya satu implementasi saja.
+ */
+async function startGuidedGenerate(projectId, runPanel, elements) {
+  const { promptInput, guidedPanel, runButton, testCaseId } = elements;
+  const prompt = promptInput?.value.trim() ?? '';
+  if (!prompt) {
+    promptInput?.focus();
+    return;
+  }
+  if (!guidedPanel) {
+    return;
+  }
+  const log = guidedPanel.querySelector('.guided-generate-log');
+  log?.replaceChildren();
+  if (runButton) {
+    setSubmitButtonLoading(runButton, true);
+  }
+  appendGenerateLog(guidedPanel, 'Menyiapkan sesi browser…', 'active');
+  try {
+    const sessionId = await ensureRunSession(projectId, runPanel);
+    if (!sessionId) {
+      throw new Error('Sesi browser belum siap, tunggu sebentar lalu coba lagi.');
+    }
+    const data = await requestJson(
+      `/projects/${projectId}/test-cases/generate-guided`,
+      'POST',
+      testCaseId ? { prompt, sessionId, testCaseId } : { prompt, sessionId },
+    );
+    if (!data.generateId) {
+      throw new Error('Generate tidak mengembalikan generateId');
+    }
+    watchGuidedGenerate(projectId, data.generateId, guidedPanel, runButton);
+  } catch (error) {
+    appendGenerateLog(
+      guidedPanel,
+      error instanceof Error ? error.message : 'Test case gagal digenerate',
+      'error',
+    );
+    if (runButton) {
+      setSubmitButtonLoading(runButton, false);
+    }
+  }
+}
+
+/**
+ * Keterangan: Memproses satu event WS guided generate — dipisah dari
+ * watchGuidedGenerate (bukan inline di socket listener) supaya bisa dites
+ * langsung tanpa perlu koneksi WebSocket sungguhan.
+ */
+function handleGuidedGenerateEvent(event, projectId, generateId, guidedPanel, finish) {
+  if (event.runId !== generateId || guidedPanel.dataset.activeGenerateId !== generateId) {
+    return;
+  }
+  if (event.type === 'generate:status') {
+    appendGenerateLog(guidedPanel, event.message, 'active');
+  } else if (event.type === 'generate:need-input') {
+    showAuthInputPanel(guidedPanel, event);
+    wireAuthInputPanel(guidedPanel, projectId, generateId);
+  } else if (event.type === 'generate:done') {
+    appendGenerateLog(guidedPanel, 'Test case tersimpan.', 'done');
+    finish();
+    // Sengaja TIDAK reload halaman — supaya panel live Playwright (kanan)
+    // tetap menampilkan kondisi terakhirnya, sama seperti selesai
+    // menjalankan test case biasa. Daftar test case cukup di-refresh
+    // sebagian lewat fetch+swap .test-case-list, bukan navigasi penuh.
+    void refreshTestCaseList(projectId, document.querySelector('#test-case-form'));
+    const dialog = guidedPanel.closest('dialog');
+    if (dialog) {
+      window.setTimeout(() => dialog.close(), 700);
+    } else if (guidedPanel.id === 'guided-generate-sidebar-panel') {
+      window.setTimeout(() => {
+        guidedPanel.hidden = true;
+        document.querySelector('#test-case-search-form')?.removeAttribute('hidden');
+        document.querySelector('.test-case-list')?.removeAttribute('hidden');
+      }, 700);
+    }
+  } else if (event.type === 'generate:error') {
+    appendGenerateLog(guidedPanel, event.message || 'Generate test case gagal', 'error');
+    finish();
+  }
+}
+
+/**
+ * Keterangan: Subscribe WS untuk satu guided generate run — reuse kontrak
+ * event yang sama dengan generate proyek (generate:status/need-input/
+ * done/error). Frame live view TIDAK disubscribe di sini — sudah otomatis
+ * tampil di panel "Live run" kanan lewat sessionId yang sama (screencast
+ * sesi di-retarget server-side, lihat withSessionPage).
+ */
+function watchGuidedGenerate(projectId, generateId, guidedPanel, runButton) {
+  const previousId = guidedPanel.dataset.activeGenerateId;
+  if (previousId && previousId !== generateId) {
+    closeSocketForRun(previousId);
+  }
+  guidedPanel.dataset.activeGenerateId = generateId;
+  guidedPanel.dataset.finished = 'false';
+
+  const socket = new WebSocket(createWebSocketUrl());
+  activeSockets.set(generateId, socket);
+
+  const finish = () => {
+    guidedPanel.dataset.finished = 'true';
+    closeSocketForRun(generateId);
+    if (runButton) {
+      setSubmitButtonLoading(runButton, false);
+    }
+  };
+
+  socket.addEventListener('open', () => {
+    socket.send(JSON.stringify({ type: 'subscribe:run', runId: generateId }));
+  });
+  socket.addEventListener('message', (message) => {
+    let event;
+    try {
+      event = JSON.parse(message.data);
+    } catch {
+      return;
+    }
+    handleGuidedGenerateEvent(event, projectId, generateId, guidedPanel, finish);
+  });
+  socket.addEventListener('close', () => {
+    activeSockets.delete(generateId);
+    if (guidedPanel.dataset.activeGenerateId !== generateId || guidedPanel.dataset.finished === 'true') {
+      return;
+    }
+    appendGenerateLog(
+      guidedPanel,
+      'Koneksi live terputus. Generate tetap berjalan di server — muat ulang beberapa saat lagi bila hasil belum muncul.',
+      'error',
+    );
+  });
 }
 
 /**
@@ -1599,10 +2964,10 @@ async function deleteProject(button) {
  */
 function initializeManagementUi() {
   const projectForm = document.querySelector('#project-form');
-  const testCaseForm = document.querySelector('#test-case-form');
-  if (!projectForm || !testCaseForm) {
+  if (!projectForm) {
     return;
   }
+  const testCaseForm = document.querySelector('#test-case-form');
   document
     .querySelector('#new-project-button')
     .addEventListener('click', () => openProjectDialog());
@@ -1625,7 +2990,7 @@ function initializeManagementUi() {
   });
   document
     .querySelector('#add-step-button')
-    .addEventListener('click', () => addStep({ action: 'goto' }));
+    ?.addEventListener('click', () => addStep({ action: 'goto' }));
   document
     .querySelector('#add-provider-key-button')
     ?.addEventListener('click', () => {
@@ -1633,9 +2998,31 @@ function initializeManagementUi() {
       list?.append(createProviderKeyRow({ provider: 'openai' }));
     });
   projectForm.addEventListener('submit', (event) => void submitProjectForm(event));
-  testCaseForm.addEventListener('submit', (event) =>
-    void submitTestCaseForm(event),
-  );
+  if (testCaseForm) {
+    testCaseForm.addEventListener('submit', (event) =>
+      void submitTestCaseForm(event),
+    );
+    document
+      .querySelector('#add-step-button')
+      ?.addEventListener('click', () => addStep({ action: 'goto' }));
+    document.querySelectorAll('.edit-test-case-button').forEach((button) => {
+      button.addEventListener('click', () => {
+        const article = button.closest('.test-case');
+        try {
+          openTestCaseDialog(
+            article.dataset.projectId,
+            JSON.parse(article.dataset.testCase),
+          );
+        } catch {
+          openTestCaseDialog(article.dataset.projectId);
+          showFormError(
+            testCaseForm,
+            'Data test case gagal dibaca. Muat ulang halaman.',
+          );
+        }
+      });
+    });
+  }
   document
     .querySelector('#instruction-form')
     ?.addEventListener('submit', (event) => void submitInstructionForm(event));
@@ -1648,36 +3035,12 @@ function initializeManagementUi() {
       openInstructionDialog(button.dataset.projectId),
     );
   });
-  document.querySelectorAll('.generate-script-button').forEach((button) => {
+  document.querySelectorAll('.ai-test-script-button').forEach((button) => {
     button.addEventListener('click', (event) => startGenerateFromProject(event));
   });
   document
-    .querySelector('#manual-test-case-button')
-    ?.addEventListener('click', () => {
-      const instructionForm = document.querySelector('#instruction-form');
-      const projectId = instructionForm?.elements.projectId.value;
-      document.querySelector('#instruction-dialog')?.close();
-      if (projectId) {
-        openTestCaseDialog(projectId);
-      }
-    });
-  document.querySelectorAll('.edit-test-case-button').forEach((button) => {
-    button.addEventListener('click', () => {
-      const article = button.closest('.test-case');
-      try {
-        openTestCaseDialog(
-          article.dataset.projectId,
-          JSON.parse(article.dataset.testCase),
-        );
-      } catch {
-        openTestCaseDialog(article.dataset.projectId);
-        showFormError(
-          testCaseForm,
-          'Data test case gagal dibaca. Muat ulang dashboard.',
-        );
-      }
-    });
-  });
+    .querySelector('#generate-replace-confirm-button')
+    ?.addEventListener('click', () => confirmGenerateReplace());
 }
 
 /**
@@ -1789,20 +3152,8 @@ function filterDashboardEntries(rawQuery) {
     const projectName =
       card.querySelector('.project-heading h2')?.textContent.toLowerCase() ?? '';
     const projectMatches = query === '' || projectName.includes(query);
-    let anyTestCaseVisible = false;
-
-    card.querySelectorAll('.test-case').forEach((testCase) => {
-      const title = testCase.querySelector('h3')?.textContent.toLowerCase() ?? '';
-      const testCaseMatches = projectMatches || title.includes(query);
-      testCase.hidden = !testCaseMatches;
-      if (testCaseMatches) {
-        anyTestCaseVisible = true;
-      }
-    });
-
-    const cardVisible = projectMatches || anyTestCaseVisible;
-    card.hidden = !cardVisible;
-    if (cardVisible) {
+    card.hidden = !projectMatches;
+    if (projectMatches) {
       anyProjectVisible = true;
     }
   });
@@ -1834,6 +3185,25 @@ function wireSearchFilter() {
  * subscriber gateway segera dibersihkan.
  */
 function closeActiveSockets() {
+  const workspace = document.querySelector('#testcases-workspace');
+  const projectId = workspace?.dataset.projectId;
+  if (activeRunSessionId && projectId && token) {
+    void fetch(
+      `/projects/${projectId}/test-runs/session/${activeRunSessionId}/stop`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: '{}',
+        keepalive: true,
+      },
+    ).catch(() => undefined);
+    activeRunSessionId = null;
+    activeRunSessionProjectId = null;
+  }
+
   for (const runId of [...activeSockets.keys()]) {
     closeSocketForRun(runId);
   }
@@ -1866,10 +3236,12 @@ async function initializeGenerateWorkspace() {
   appendGenerateLog(panel, 'Menunggu Playwright…', 'active');
 
   try {
+    const replaceExisting = sessionStorage.getItem('generateReplaceExisting') === '1';
+    sessionStorage.removeItem('generateReplaceExisting');
     const data = await requestJson(
       `/projects/${projectId}/generate/prompt`,
       'POST',
-      {},
+      { replaceExisting },
     );
     if (!data.generateId) {
       throw new Error('Generate tidak mengembalikan generateId');
@@ -1886,6 +3258,225 @@ async function initializeGenerateWorkspace() {
 }
 
 /**
+ * Keterangan: Memasang listener Edit/Run/Putar Ulang untuk setiap item di
+ * daftar test case sidebar — dipisah jadi fungsi sendiri (bukan inline di
+ * initializeTestCasesWorkspace) supaya bisa dipanggil ULANG setelah
+ * refreshTestCaseList mengganti isi .test-case-list dengan markup baru dari
+ * server (item lama beserta listener-nya ikut hilang saat diganti).
+ */
+function wireTestCaseListButtons(testCaseForm) {
+  document.querySelectorAll('.edit-test-case-button').forEach((button) => {
+    if (button.dataset.wired === 'true') {
+      return;
+    }
+    button.dataset.wired = 'true';
+    button.addEventListener('click', () => {
+      const article = button.closest('.test-case');
+      try {
+        openTestCaseDialog(
+          article.dataset.projectId,
+          JSON.parse(article.dataset.testCase),
+        );
+      } catch {
+        openTestCaseDialog(article.dataset.projectId);
+        if (testCaseForm) {
+          showFormError(
+            testCaseForm,
+            'Data test case gagal dibaca. Muat ulang halaman.',
+          );
+        }
+      }
+    });
+  });
+  document.querySelectorAll('.run-button').forEach((button) => {
+    if (button.dataset.wired === 'true') {
+      return;
+    }
+    button.dataset.wired = 'true';
+    button.addEventListener('click', () => void startRun(button));
+  });
+  document.querySelectorAll('.replay-button').forEach((button) => {
+    if (button.dataset.wired === 'true') {
+      return;
+    }
+    button.dataset.wired = 'true';
+    button.addEventListener('click', () => void replayLatestRun(button));
+  });
+}
+
+/**
+ * Keterangan: Mengambil ulang daftar test case dari server (fetch halaman
+ * yang sama, ambil markup .test-case-list terbaru) lalu menukarnya di DOM —
+ * TANPA reload penuh, supaya panel live Playwright (kanan) tidak ikut reset
+ * kondisi terakhirnya. Dipakai setelah guided generate selesai menyimpan
+ * test case baru.
+ */
+async function refreshTestCaseList(projectId, testCaseForm) {
+  try {
+    const response = await fetch(window.location.pathname);
+    if (!response.ok) {
+      return false;
+    }
+    const html = await response.text();
+    const newDocument = new DOMParser().parseFromString(html, 'text/html');
+    const newList = newDocument.querySelector('.test-case-list');
+    const currentList = document.querySelector('.test-case-list');
+    if (!newList || !currentList) {
+      return false;
+    }
+    currentList.replaceWith(newList);
+    if (newList.childElementCount > 0) {
+      document.querySelector('.test-case-sidebar-empty')?.setAttribute('hidden', '');
+    }
+    wireTestCaseListButtons(testCaseForm);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Keterangan: Filter daftar test case di sidebar halaman test case lewat
+ * search navbar (sama seperti dashboard).
+ */
+function wireTestCaseSearchFilter() {
+  const workspace = document.querySelector('#testcases-workspace');
+  const form = document.querySelector('#test-case-search-form');
+  const sidebarInput = document.querySelector('#test-case-search');
+  const navInput = document.querySelector('#dashboard-search');
+  const inputs = [sidebarInput, navInput].filter(Boolean);
+  if (!workspace || inputs.length === 0) {
+    return;
+  }
+
+  const applyFilter = (source) => {
+    const value = (source?.value ?? sidebarInput?.value ?? '').trim().toLowerCase();
+    let visibleCount = 0;
+    workspace.querySelectorAll('.test-case-item').forEach((item) => {
+      const title = item.querySelector('h3')?.textContent?.toLowerCase() ?? '';
+      const description =
+        item.querySelector('.test-case-description')?.textContent?.toLowerCase() ?? '';
+      const match = value === '' || title.includes(value) || description.includes(value);
+      item.hidden = !match;
+      if (match) {
+        visibleCount += 1;
+      }
+    });
+    const empty = workspace.querySelector('.test-case-search-empty');
+    if (empty) {
+      empty.hidden = value === '' || visibleCount > 0;
+    }
+  };
+
+  for (const input of inputs) {
+    input.addEventListener('input', () => applyFilter(input));
+  }
+  form?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    applyFilter(sidebarInput ?? navInput);
+  });
+}
+
+/**
+ * Keterangan: Menginisialisasi halaman test case full-width: sidebar kiri daftar
+ * test case, panel kanan live Playwright / replay rekaman.
+ */
+function initializeTestCasesWorkspace() {
+  const workspace = document.querySelector('#testcases-workspace');
+  const panel = workspace?.querySelector('.run-workspace-panel');
+  const projectId = workspace?.dataset.projectId;
+  if (!workspace || !panel || !projectId) {
+    return;
+  }
+
+  renderUserIdentity();
+  wireUserMenu();
+  wireTestCaseSearchFilter();
+  document.querySelector('#logout-button')?.addEventListener('click', () => {
+    void handleLogout();
+  });
+
+  const testCaseForm = document.querySelector('#test-case-form');
+  if (testCaseForm) {
+    testCaseForm.addEventListener('submit', (event) =>
+      void submitTestCaseForm(event),
+    );
+    document
+      .querySelector('#add-step-button')
+      ?.addEventListener('click', () => addStep({ action: 'goto' }));
+    document.querySelectorAll('#test-case-mode-toggle .mode-toggle-button').forEach((button) => {
+      button.addEventListener('click', () => setTestCaseDialogMode(button.dataset.mode));
+    });
+    document
+      .querySelector('#guided-generate-run-button')
+      ?.addEventListener('click', () =>
+        void startGuidedGenerate(projectId, panel, {
+          promptInput: document.querySelector('#guided-generate-prompt'),
+          guidedPanel: document.querySelector('#guided-generate-panel'),
+          runButton: document.querySelector('#guided-generate-run-button'),
+          // Kosong (create) kalau modal sedang mode "Tambah Test Case",
+          // terisi (edit) kalau modal sedang mode "Edit Test Case" — hasil
+          // guided flow lalu meng-update test case ini alih-alih membuat baru.
+          testCaseId: document.querySelector('#test-case-form')?.elements.testCaseId.value || undefined,
+        }),
+      );
+    document.querySelector('#test-case-dialog')?.addEventListener('close', () => {
+      void abortGuidedGenerateIfActive(document.querySelector('#guided-generate-panel'), projectId);
+    });
+  }
+  wireTestCaseListButtons(testCaseForm);
+
+  document.querySelectorAll('[data-close-dialog]').forEach((button) => {
+    button.addEventListener('click', () => button.closest('dialog').close());
+  });
+
+  document.querySelector('#run-suite-button')?.addEventListener('click', (event) => {
+    void startSuiteRun(event.currentTarget);
+  });
+  document.querySelector('#stop-run-button')?.addEventListener('click', (event) => {
+    void abortActiveRun(event.currentTarget);
+  });
+  document.querySelector('#add-test-case-button')?.addEventListener('click', () => {
+    openTestCaseDialog(projectId);
+  });
+
+  document.querySelector('#add-test-case-ai-button')?.addEventListener('click', () => {
+    void openGuidedGenerateSidebarPanel(projectId, panel);
+  });
+  document.querySelector('#guided-generate-sidebar-close')?.addEventListener('click', () => {
+    void closeGuidedGenerateSidebarPanel(projectId);
+  });
+  document.querySelector('#guided-generate-sidebar-run')?.addEventListener('click', () =>
+    void startGuidedGenerate(projectId, panel, {
+      promptInput: document.querySelector('#guided-generate-sidebar-prompt'),
+      guidedPanel: document.querySelector('#guided-generate-sidebar-panel'),
+      runButton: document.querySelector('#guided-generate-sidebar-run'),
+    }),
+  );
+
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('create') === '1') {
+    openTestCaseDialog(projectId);
+    window.history.replaceState({}, '', window.location.pathname);
+  }
+
+  document.querySelector('#page-loading').hidden = true;
+  document.querySelector('#dashboard-content').hidden = false;
+
+  void ensureRunSession(projectId, panel).catch((error) => {
+    updateStatus(panel, 'error');
+    const placeholder = getRunContentElement(panel)?.querySelector('.live-placeholder');
+    if (placeholder) {
+      placeholder.textContent =
+        error instanceof Error
+          ? error.message
+          : 'Gagal membuka sesi browser persisten';
+    }
+  });
+  void loadLatestSuiteAnalysis(projectId);
+}
+
+/**
  * Keterangan: Menginisialisasi dashboard, memuat katalog provider saat spinner
  * halaman aktif, lalu menampilkan seluruh fitur CRUD dan eksekusi.
  */
@@ -1898,15 +3489,16 @@ async function initializeDashboard() {
     await initializeGenerateWorkspace();
     return;
   }
+  if (document.querySelector('#testcases-workspace')) {
+    initializeTestCasesWorkspace();
+    return;
+  }
   initializeManagementUi();
   renderUserIdentity();
   wireUserMenu();
   wireSearchFilter();
   document.querySelector('#logout-button')?.addEventListener('click', () => {
     void handleLogout();
-  });
-  document.querySelectorAll('.run-button').forEach((button) => {
-    button.addEventListener('click', () => void startRun(button));
   });
   try {
     await loadProviderCatalogs();

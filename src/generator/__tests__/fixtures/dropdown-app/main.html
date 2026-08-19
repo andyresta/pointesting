@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="utf-8" />
+    <title>Dashboard Admin</title>
+    <style>
+      .dropdown-menu { display: none; }
+      .dropdown-menu.open { display: block; }
+    </style>
+    <script>
+      document.addEventListener('click', (event) => {
+        const toggle = event.target.closest('[data-toggle="dropdown"]');
+        if (!toggle) return;
+        event.preventDefault();
+        const menu = toggle.nextElementSibling;
+        if (menu) menu.classList.toggle('open');
+      });
+    </script>
+  </head>
+  <body>
+    <nav>
+      <h1>Dashboard</h1>
+      <a id="customerDropdown" class="dropdown-toggle" href="#" data-toggle="dropdown">Pelanggan</a>
+      <div class="dropdown-menu">
+        <a id="customer-list" href="customers.html">Daftar Pelanggan</a>
+        <a id="customer-add" href="customers-add.html">Tambah Pelanggan</a>
+      </div>
+      <a id="sales-link" href="sales.html">Penjualan</a>
+    </nav>
+  </body>
+</html>

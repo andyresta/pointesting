@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Fixture MCP Driver</title>
+  </head>
+  <body>
+    <h1>Fixture untuk McpPageDriver</h1>
+
+    <input id="name-input" type="text" />
+
+    <button id="submit-btn" onclick="document.getElementById('result').textContent = 'clicked'">
+      Submit
+    </button>
+    <div id="result"></div>
+
+    <input id="agree-checkbox" type="checkbox" />
+
+    <select id="color-select">
+      <option value="red">Merah</option>
+      <option value="blue">Biru</option>
+    </select>
+
+    <button
+      id="confirm-btn"
+      onclick="window.__confirmResult = confirm('Yakin?'); document.getElementById('result').textContent = 'after-confirm';"
+    >
+      Trigger Confirm
+    </button>
+  </body>
+</html>

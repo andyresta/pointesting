@@ -81,5 +81,27 @@
         </section>
       </main>
     </div>
+
+    <dialog id="generate-auth-dialog" class="app-dialog generate-auth-dialog" aria-labelledby="generate-auth-dialog-title">
+      <form class="dialog-form generate-auth-form" method="dialog">
+        <div class="dialog-header">
+          <div>
+            <h2 id="generate-auth-dialog-title">Input autentikasi</h2>
+            <p class="generate-auth-message muted"></p>
+          </div>
+        </div>
+        <div class="generate-auth-fields"></div>
+        <div class="dialog-actions generate-auth-actions">
+          <button type="button" class="secondary-button generate-auth-skip">
+            Lewati zona ini
+          </button>
+          <button type="submit" class="primary-button generate-auth-submit">
+            <span class="button-label">Kirim &amp; lanjutkan</span>
+            <span class="spinner spinner-small" aria-hidden="true" hidden></span>
+          </button>
+        </div>
+        <p class="form-error generate-auth-error" hidden></p>
+      </form>
+    </dialog>
   </body>
 </html>

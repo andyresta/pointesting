@@ -259,6 +259,47 @@ test('OpenCode Go memakai base URL terpisah dengan API key yang sama', async () 
   );
 });
 
+test('OpenCode Go merutekan MiniMax/Qwen ke Messages, tapi Zen tetap Chat Completions untuk MiniMax', async () => {
+  const cases = [
+    {
+      providerName: 'opencode-go' as const,
+      model: 'minimax-m3',
+      expectedUrl: 'https://opencode.ai/zen/go/v1/messages',
+      response: { content: [{ type: 'text', text: '{}' }] },
+    },
+    {
+      providerName: 'opencode-go' as const,
+      model: 'qwen3.8-max',
+      expectedUrl: 'https://opencode.ai/zen/go/v1/messages',
+      response: { content: [{ type: 'text', text: '{}' }] },
+    },
+    {
+      providerName: 'opencode' as const,
+      model: 'minimax-m3',
+      expectedUrl: 'https://opencode.ai/zen/v1/chat/completions',
+      response: { choices: [{ message: { content: '{}' } }] },
+    },
+    {
+      providerName: 'opencode' as const,
+      model: 'qwen3.7-max',
+      expectedUrl: 'https://opencode.ai/zen/v1/messages',
+      response: { content: [{ type: 'text', text: '{}' }] },
+    },
+  ];
+
+  for (const item of cases) {
+    const capture: CapturedRequest = {};
+    const client = new OpenCodeLLMClient({
+      apiKey: 'key-placeholder',
+      model: item.model,
+      providerName: item.providerName,
+      fetchImpl: createFetchMock(item.response, capture),
+    });
+    await client.complete('system', ['user']);
+    expect(capture.url).toBe(item.expectedUrl);
+  }
+});
+
 test('rate limit dinormalisasi menjadi ProviderError retryable', async () => {
   const capture: CapturedRequest = {};
   const client = new DeepSeekLLMClient({

@@ -11,6 +11,8 @@ import {
 
 const OPENCODE_ZEN_BASE_URL = 'https://opencode.ai/zen/v1';
 const OPENCODE_GO_BASE_URL = 'https://opencode.ai/zen/go/v1';
+// Generator butuh output JSON banyak step; 1000 token gampang terpotong.
+const MESSAGES_PROTOCOL_MAX_TOKENS = 8_192;
 
 type OpenCodeProtocol = 'chat' | 'messages' | 'responses' | 'gemini';
 
@@ -46,14 +48,27 @@ export interface OpenCodeClientOptions {
 }
 
 /**
- * Keterangan: Memilih protokol resmi OpenCode Zen berdasarkan keluarga model:
- * Claude→Messages, GPT/Grok→Responses, Gemini→generateContent, lainnya→Chat.
+ * Keterangan: Memilih protokol resmi OpenCode Zen/Go berdasarkan keluarga
+ * model, sesuai tabel endpoint resmi (https://opencode.ai/docs/zen dan
+ * https://opencode.ai/docs/go). Claude/Qwen selalu Messages (Anthropic);
+ * MiniMax hanya Messages khusus di produk Go (di Zen tetap Chat Completions);
+ * GPT/Grok/Muse→Responses; Gemini→generateContent; sisanya→Chat Completions.
  */
-function getOpenCodeProtocol(model: string): OpenCodeProtocol {
-  if (model.startsWith('claude-')) {
+function getOpenCodeProtocol(
+  model: string,
+  providerName: Extract<ProviderName, 'opencode' | 'opencode-go'>,
+): OpenCodeProtocol {
+  if (model.startsWith('claude-') || model.startsWith('qwen')) {
     return 'messages';
   }
-  if (model.startsWith('gpt-') || model.startsWith('grok-')) {
+  if (model.startsWith('minimax-') && providerName === 'opencode-go') {
+    return 'messages';
+  }
+  if (
+    model.startsWith('gpt-') ||
+    model.startsWith('grok-') ||
+    model.startsWith('muse-')
+  ) {
     return 'responses';
   }
   if (model.startsWith('gemini-')) {
@@ -148,7 +163,7 @@ export class OpenCodeLLMClient implements LLMClient {
     userContent: LLMUserContent[],
   ): Promise<string> {
     assertProviderConfigured(this.providerName, this.apiKey, this.model);
-    const protocol = getOpenCodeProtocol(this.model);
+    const protocol = getOpenCodeProtocol(this.model, this.providerName);
     const userText = joinTextContent(userContent);
     const headers = { Authorization: `Bearer ${this.apiKey}` };
 
@@ -158,7 +173,7 @@ export class OpenCodeLLMClient implements LLMClient {
       endpoint = `${this.baseUrl}/messages`;
       body = {
         model: this.model,
-        max_tokens: 1_000,
+        max_tokens: MESSAGES_PROTOCOL_MAX_TOKENS,
         system: systemPrompt,
         messages: [{ role: 'user', content: userText }],
       };

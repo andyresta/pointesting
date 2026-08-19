@@ -9,6 +9,8 @@ import {
 } from './provider-utils';
 
 const CLAUDE_MESSAGES_URL = 'https://api.anthropic.com/v1/messages';
+// Generator butuh output JSON banyak step; 1000 token gampang terpotong.
+const CLAUDE_MAX_TOKENS = 8_192;
 
 interface ClaudeResponse {
   content?: Array<{ type?: unknown; text?: unknown }>;
@@ -65,7 +67,7 @@ export class ClaudeLLMClient implements LLMClient {
       },
       {
         model: this.model,
-        max_tokens: 1_000,
+        max_tokens: CLAUDE_MAX_TOKENS,
         system: systemPrompt,
         messages: [{ role: 'user', content }],
       },

@@ -11,16 +11,6 @@ const DASHBOARD_SCRIPT = path.resolve(
  * menguji dialog, step builder, dan payload tanpa database atau server nyata.
  */
 function createDashboardFixture(): string {
-  const testCase = JSON.stringify({
-    id: 'case-1',
-    title: 'Login berhasil',
-    steps: [
-      { action: 'goto', url: '/login' },
-      { action: 'fill', selector: '#email', value: 'tester@example.test' },
-    ],
-    expected: ['Dashboard tampil'],
-  });
-
   return `<!doctype html>
     <html lang="id">
       <body>
@@ -61,26 +51,31 @@ function createDashboardFixture(): string {
               data-project-name="Portal Internal"
             ></button>
             <button
-              class="secondary-button instruction-button"
+              class="secondary-button instruction-button compact-icon-action"
+              type="button"
               data-project-id="project-1"
+              title="Instruction"
             >Instruction</button>
-            <a
-              class="generate-script-button"
-              href="/dashboard/projects/project-1/generate"
-              data-project-id="project-1"
-            >
-              <span class="button-label">Generate Test Script</span>
-              <span class="spinner" hidden></span>
-            </a>
+            <span class="count">2 test case</span>
+            <div class="project-card-footer">
+              <div class="project-quick-actions">
+                <button
+                  class="primary-button compact-action ai-test-script-button"
+                  type="button"
+                  data-project-id="project-1"
+                  data-generate-url="/dashboard/projects/project-1/generate"
+                  data-test-case-count="2"
+                >
+                  <span class="button-label">Ai Test Script</span>
+                  <span class="spinner" hidden></span>
+                </button>
+                <a
+                  class="secondary-button compact-action test-cases-link"
+                  href="/dashboard/projects/project-1/test-cases"
+                >Test Case</a>
+              </div>
+            </div>
           </section>
-          <article
-            class="test-case"
-            data-project-id="project-1"
-            data-test-case-id="case-1"
-            data-test-case='${testCase}'
-          >
-            <button class="edit-test-case-button" type="button">Edit</button>
-          </article>
         </main>
 
         <dialog id="project-dialog">
@@ -107,13 +102,65 @@ function createDashboardFixture(): string {
             <textarea name="prompt" required></textarea>
             <textarea name="extraData"></textarea>
             <p class="form-error" hidden></p>
-            <button id="manual-test-case-button" type="button">Buat manual</button>
             <button class="submit-button" type="submit">
               <span class="button-label">Simpan Instruction</span>
               <span class="spinner" hidden></span>
             </button>
           </form>
         </dialog>
+
+        <dialog id="generate-replace-dialog">
+          <div class="dialog-form">
+            <strong id="generate-replace-count">0</strong>
+            <button id="generate-replace-confirm-button" type="button">
+              <span class="button-label">Ganti &amp; Generate</span>
+              <span class="spinner" hidden></span>
+            </button>
+          </div>
+        </dialog>
+      </body>
+    </html>`;
+}
+
+/**
+ * Keterangan: Fixture halaman test case full-width untuk builder dan run UI.
+ */
+function createTestCasesPageFixture(): string {
+  const testCase = JSON.stringify({
+    id: 'case-1',
+    title: 'Login berhasil',
+    steps: [
+      { action: 'goto', url: '/login' },
+      { action: 'fill', selector: '#email', value: 'tester@example.test' },
+    ],
+    expected: ['Dashboard tampil'],
+  });
+
+  return `<!doctype html>
+    <html lang="id">
+      <body class="generate-layout-page">
+        <div id="page-loading">Loading</div>
+        <div id="dashboard-content" class="generate-shell" hidden>
+          <main id="testcases-workspace" data-project-id="project-1">
+            <section class="generate-panel generate-panel-page run-workspace-panel">
+              <aside class="test-case-sidebar">
+                <ol class="test-case-list">
+                  <li
+                    class="test-case test-case-item"
+                    data-project-id="project-1"
+                    data-test-case-id="case-1"
+                    data-test-case='${testCase}'
+                  >
+                    <button class="edit-test-case-button" type="button">Edit</button>
+                  </li>
+                </ol>
+              </aside>
+              <div class="generate-view run-view-panel">
+                <div class="live-placeholder"></div>
+              </div>
+            </section>
+          </main>
+        </div>
 
         <dialog id="test-case-dialog">
           <form id="test-case-form">
@@ -197,6 +244,26 @@ async function prepareCrudPage(page: Page): Promise<void> {
     });
   });
   await page.goto('http://dashboard.test/');
+  await page.addScriptTag({ path: DASHBOARD_SCRIPT });
+  await expect(page.locator('#dashboard-content')).toBeVisible();
+}
+
+async function prepareTestCasesPage(page: Page, pathSuffix = ''): Promise<void> {
+  await page.addInitScript(() => {
+    sessionStorage.setItem('pointestingToken', 'token-placeholder');
+  });
+  await page.route(
+    `http://dashboard.test/dashboard/projects/project-1/test-cases${pathSuffix}`,
+    async (route) => {
+      await route.fulfill({
+        contentType: 'text/html',
+        body: createTestCasesPageFixture(),
+      });
+    },
+  );
+  await page.goto(
+    `http://dashboard.test/dashboard/projects/project-1/test-cases${pathSuffix}`,
+  );
   await page.addScriptTag({ path: DASHBOARD_SCRIPT });
   await expect(page.locator('#dashboard-content')).toBeVisible();
 }
@@ -345,12 +412,21 @@ test('instruction menyimpan prompt ke project tanpa generate', async ({ page }) 
 
 test('generate test script membuka halaman generate full-width', async ({ page }) => {
   await prepareCrudPage(page);
-  await expect(
-    page.getByRole('link', { name: 'Generate Test Script' }),
-  ).toHaveAttribute('href', '/dashboard/projects/project-1/generate');
+  await expect(page.locator('.ai-test-script-button')).toHaveAttribute(
+    'data-generate-url',
+    '/dashboard/projects/project-1/generate',
+  );
 });
 
-test('generate tanpa instruction menampilkan peringatan', async ({ page }) => {
+test('test case dibuka di halaman terpisah dari dashboard', async ({ page }) => {
+  await prepareCrudPage(page);
+  await expect(page.getByRole('link', { name: 'Test Case', exact: true })).toHaveAttribute(
+    'href',
+    '/dashboard/projects/project-1/test-cases',
+  );
+});
+
+test('generate tanpa instruction membuka dialog instruction', async ({ page }) => {
   await prepareCrudPage(page);
   await page.locator('.project-card').evaluate((card) => {
     const project = JSON.parse(card.getAttribute('data-project') || '{}');
@@ -358,17 +434,16 @@ test('generate tanpa instruction menampilkan peringatan', async ({ page }) => {
     card.setAttribute('data-project', JSON.stringify(project));
   });
 
-  const messages: string[] = [];
-  page.on('dialog', (dialog) => {
-    messages.push(dialog.message());
-    void dialog.accept();
-  });
-  await page
-    .getByRole('link', { name: 'Generate Test Script' })
-    .click({ noWaitAfter: true });
-  expect(messages.some((message) => message.includes('Instruction'))).toBe(
-    true,
-  );
+  await page.getByRole('button', { name: 'Ai Test Script' }).click();
+  await expect(page.locator('#instruction-dialog')).toBeVisible();
+  await expect(page).toHaveURL('http://dashboard.test/');
+});
+
+test('generate dengan test case existing membuka modal konfirmasi replace', async ({ page }) => {
+  await prepareCrudPage(page);
+  await page.getByRole('button', { name: 'Ai Test Script' }).click();
+  await expect(page.locator('#generate-replace-dialog[open]')).toBeVisible();
+  await expect(page.locator('#generate-replace-count')).toHaveText('2');
   await expect(page).toHaveURL('http://dashboard.test/');
 });
 
@@ -439,7 +514,7 @@ test('halaman generate memulai job dari instruction tersimpan', async ({
   await page.addScriptTag({ path: DASHBOARD_SCRIPT });
   const request = await requestPromise;
 
-  expect(request.postDataJSON()).toEqual({});
+  expect(request.postDataJSON()).toEqual({ replaceExisting: false });
   await expect(page.locator('#dashboard-content')).toBeVisible();
   await expect(page.locator('.generate-log-list')).toContainText(
     'Menunggu Playwright',
@@ -447,7 +522,7 @@ test('halaman generate memulai job dari instruction tersimpan', async ({
 });
 
 test('test case dapat dibuat dengan dynamic step builder', async ({ page }) => {
-  await prepareCrudPage(page);
+  await prepareTestCasesPage(page, '?create=1');
   await page.route(
     'http://dashboard.test/projects/project-1/test-cases',
     async (route) => {
@@ -459,8 +534,7 @@ test('test case dapat dibuat dengan dynamic step builder', async ({ page }) => {
     },
   );
 
-  await page.getByRole('button', { name: 'Instruction' }).click();
-  await page.getByRole('button', { name: 'Buat manual' }).click();
+  await expect(page.locator('#test-case-dialog')).toBeVisible();
   await page.locator('#test-case-form [name="title"]').fill('Checkout produk');
   await page.locator('#step-list [name="url"]').fill('/products');
   await page.locator('#add-step-button').click();
@@ -493,7 +567,7 @@ test('test case dapat dibuat dengan dynamic step builder', async ({ page }) => {
 test('test case lama dapat diedit dari builder tanpa JSON manual', async ({
   page,
 }) => {
-  await prepareCrudPage(page);
+  await prepareTestCasesPage(page);
   await page.route('http://dashboard.test/test-cases/case-1', async (route) => {
     await route.fulfill({
       contentType: 'application/json',

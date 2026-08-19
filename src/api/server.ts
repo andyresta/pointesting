@@ -12,6 +12,7 @@ import { aiRoutes } from './routes/ai.routes';
 import { authRoutes } from './routes/auth.routes';
 import { dashboardRoutes } from './routes/dashboard.routes';
 import { generatorRoutes } from './routes/generator.routes';
+import { guidedGenerateRoutes } from './routes/guided-generate.routes';
 import { projectRoutes } from './routes/project.routes';
 import { testCaseRoutes } from './routes/testcase.routes';
 import { testRunRoutes } from './routes/testrun.routes';
@@ -62,6 +63,7 @@ export function buildServer() {
   app.register(testRunRoutes);
   app.register(aiRoutes);
   app.register(generatorRoutes);
+  app.register(guidedGenerateRoutes);
   app.register(authRoutes);
   app.register(dashboardRoutes);
   registerWebSocketGateway(app);

@@ -211,3 +211,42 @@ export interface TestStepResultUpdateData {
   errorMessage?: string | null;
   durationMs?: number | null;
 }
+
+/**
+ * Keterangan: Hasil "Suite Analysis" — analisis AI lintas-fitur setelah
+ * semua test case dalam satu suite run selesai, mencari inkonsistensi antar
+ * fitur, coverage gap sederhana, dan pola kegagalan sistemik. Berbeda dari
+ * `analysis_result` (per test_run tunggal) — ini melihat gambaran besar.
+ */
+export type SuiteAnalysisStatus = 'consistent' | 'issues_found' | 'incomplete';
+
+export interface SuiteAnalysisFinding {
+  category: 'inconsistency' | 'coverage_gap' | 'systemic_failure' | 'other';
+  title: string;
+  detail: string;
+  relatedTestCases: string[];
+}
+
+export interface SuiteAnalysisResultRecord {
+  id: string;
+  projectId: string;
+  suiteRunId: string;
+  testRunIds: string[];
+  status: SuiteAnalysisStatus;
+  summary: string | null;
+  findings: SuiteAnalysisFinding[];
+  provider: ProviderName;
+  rawResponse: JsonValue | null;
+  createdAt: Date | null;
+}
+
+export interface SuiteAnalysisResultCreateData {
+  projectId: string;
+  suiteRunId: string;
+  testRunIds: string[];
+  status: SuiteAnalysisStatus;
+  summary?: string | null;
+  findings: SuiteAnalysisFinding[];
+  provider: ProviderName;
+  rawResponse?: JsonValue | null;
+}

@@ -10,14 +10,14 @@ Referensi: `roadmap-ai-testing-tool.md`, `arsitektur-spesifikasi-teknis.md`, `ex
 
 | | |
 |---|---|
-| Fase saat ini | Fase 2 |
+| Fase saat ini | Fase 2 (Fase 3 sudah berjalan sebagian via arsitektur alternatif) |
 | Step aktif | Step 21 |
 | Progress Fase 1 | 15 / 15 step selesai |
 | Progress Fase 2 | 6 / 8 step selesai |
-| Progress Fase 3 | 0 / 4 step selesai |
+| Progress Fase 3 | 2 / 4 step selesai (via arsitektur alternatif, bukan MCP — lihat catatan tabel) |
 | Progress Fase 4 | 0 / 3 step selesai |
 | Progress Fase 5 | 0 / 4 step selesai |
-| Terakhir diupdate | 2026-08-17 |
+| Terakhir diupdate | 2026-08-19 |
 
 ---
 
@@ -66,12 +66,31 @@ Referensi: `roadmap-ai-testing-tool.md`, `arsitektur-spesifikasi-teknis.md`, `ex
 
 ### Fase 3 — Test Generation dari AI
 
+**PENTING:** implementasi nyata Fase 3 **menyimpang dari desain asli** di
+`arsitektur-spesifikasi-teknis.md` bagian 9 (MCP + tabel `test_case_draft`) —
+riwayatnya DUA TAHAP, bukan sekali putus. (1) 2026-08-18: MCP ditinggalkan
+total, diganti kontrol Chromium langsung (`chromium.launch()`), karena pola
+"LLM memutuskan navigasi sendiri" gagal di app nyata. (2) 2026-08-19: MCP
+(`@playwright/mcp`) **dipasang kembali** via `src/generator/mcp-client.ts`,
+tapi HANYA sebagai lapisan "colokan" browser (`McpBrowserSession`/
+`McpExplorationDriver`/`McpPageDriver`) — logika crawl BFS + heuristik
+(nav/sidebar/hamburger/backdrop/dropdown, `page-explorer.ts`) TETAP sama,
+LLM tetap TIDAK diberi kendali navigasi. Ini sekarang satu-satunya jalur
+produksi untuk generate/eksplorasi; eksekusi test case tersimpan (bukan
+generate) tetap Playwright asli, tidak tersentuh. Tidak ada tabel
+`test_case_draft` — hasil generate **langsung insert ke `test_case`**, tidak
+ada alur draft/approval terpisah. Riwayat lengkap: `docs/memory.md`, rentetan
+entri 2026-08-18 s.d. 2026-08-19 ("Rewrite generate test script: Map-then-
+Author" s.d. "Integrasi MCP Playwright"). Status di bawah menilai KAPABILITAS,
+bukan kesesuaian literal ke desain MCP asli (endpoint terpisah, agent
+otonom, tabel draft, dsb. tetap tidak ada).
+
 | # | Step | Status | Tanggal Mulai | Tanggal Selesai | Catatan |
 |---|---|---|---|---|---|
-| 23 | MCP Client Setup | Planning | | | |
-| 24 | Prompt-based Test Generation | Planning | | | |
-| 25 | URL-based Exploration Generation | Planning | | | |
-| 26 | Draft Review UI | Planning | | | |
+| 23 | MCP Client Setup | Done | 2026-08-19 | 2026-08-19 | `src/generator/mcp-client.ts` — koneksi in-process ke `@playwright/mcp` (`createConnection()` + `InMemoryTransport`, TANPA child process/stdio). Beda dari desain asli: MCP dipakai sebagai plumbing browser murni (goto/evaluate/click/screenshot), BUKAN agent yang menerima instruksi bahasa natural dan memutuskan eksplorasi sendiri |
+| 24 | Prompt-based Test Generation | Done | 2026-08-18 | 2026-08-19 | Kapabilitas jalan penuh via arsitektur Map-then-Author (lihat catatan di atas), sejak 2026-08-19 browser-control-nya lewat MCP. Ditambah di luar desain asli: assertion action nyata (Prioritas 1), negative/boundary testing berbasis field constraint (Prioritas 3), Suite/Cross-Feature Analysis (kapabilitas baru, lihat arsitektur bagian 12) |
+| 25 | URL-based Exploration Generation | Done | 2026-08-18 | 2026-08-19 | Menyatu dengan Step 24 (satu endpoint `/generate/prompt` + `baseUrl` project, bukan endpoint `/generate/url` terpisah); crawl multi-halaman otomatis (`discoverSite`, `MAX_SITE_PAGES=20`) sinkron dalam job async yang sama, browser-control lewat MCP |
+| 26 | Draft Review UI | Planning | | | Tidak ada alur draft/approve/reject terpisah — hasil generate langsung jadi `test_case` resmi (opsional `replaceExisting`), lalu diedit lewat step builder CRUD biasa (Step 20). Tidak ada jejak audit "ini hasil AI belum direview" seperti desain asli |
 
 ### Fase 4 — Self-Healing Selector
 
@@ -95,6 +114,39 @@ Referensi: `roadmap-ai-testing-tool.md`, `arsitektur-spesifikasi-teknis.md`, `ex
 ## Changelog
 
 Format: `YYYY-MM-DD` — deskripsi perubahan (keputusan, scope, atau step yang selesai).
+
+### 2026-08-19
+- **Audit & perbaikan dokumen status** — ditemukan drift signifikan: tabel
+  Fase 3 menampilkan "0/4 Planning" padahal kapabilitas generate test case
+  sudah matang sejak 2026-08-18 (hanya beda arsitektur dari desain MCP
+  asli). Diperbaiki: Step 24-25 ditandai Done dengan catatan penyimpangan
+  arsitektur; Step 23 (MCP) dan 26 (Draft Review UI) tetap Planning karena
+  memang tidak pernah dibangun. Detail lengkap tetap di `docs/memory.md`
+  (dokumen ini sengaja ringkas, cukup status + pointer).
+- Tiga peningkatan mekanisme generate test case (di luar penomoran Step
+  resmi, hasil audit QA-perspective terhadap mekanisme yang ada):
+  1. **Assertion action nyata** — `steps` test case sekarang punya 7 action
+     checkpoint baru (`assertVisible/Hidden/Checked/Text/Value/Count/Url`)
+     yang benar-benar diverifikasi compiler saat run, bukan cuma teks
+     `expected` yang tidak pernah dicek mesin. Prompt authoring AI wajib
+     membuktikan tiap klaim `expected` lewat step assertion nyata.
+  2. **Suite/Cross-Feature Analysis** — kapabilitas baru (di luar Fase 2
+     Step 21/22 dan di luar roadmap 5 fase awal): setelah "Jalankan Semua"
+     selesai, AI menganalisis SEMUA test case sekaligus mencari
+     inkonsistensi lintas fitur, coverage gap, dan pola kegagalan sistemik
+     — bukan cuma per test case terisolasi. Tabel baru `suite_analysis_result`
+     (migration 005, belum tercatat di `arsitektur-spesifikasi-teknis.md`
+     bagian 3 sampai perbaikan dokumen ini).
+  3. **Negative/boundary testing berbasis field constraint** — snapshot
+     elemen form sekarang menangkap `required`/`maxlength`/`pattern`/
+     `min`/`max`, dan prompt authoring wajib membuat skenario negatif nyata
+     berdasarkan constraint itu (bukan improvisasi bebas LLM).
+  Detail teknis penuh: `docs/memory.md` entri 2026-08-19 (3 entri terpisah).
+- **Belum dikerjakan** dari audit ini (dicatat eksplisit, bukan diabaikan
+  diam-diam): dry-run validasi steps sebelum simpan, CRUD round-trip
+  eksplisit, prioritisasi risk-based urutan crawl, laporan halaman/interaksi
+  yang terlewat karena kuota, dan persist `SiteModel` sebagai feature map
+  lintas-generate (terkait tabel `feature_map` Fase 5 yang masih 0% dipakai).
 
 ### 2026-08-17
 - Step 20 selesai: dashboard menunggu `run:analysis` setelah status terminal,

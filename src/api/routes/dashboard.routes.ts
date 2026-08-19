@@ -45,6 +45,20 @@ async function renderGeneratePage(
 }
 
 /**
+ * Keterangan: Merender halaman test case full-width (kiri daftar, kanan live
+ * Playwright) terpisah dari kartu project di dashboard.
+ */
+async function renderTestCasesPage(projectId: string, reply: FastifyReply) {
+  const project = await projectRepository.findById(projectId);
+  if (!project) {
+    return reply.redirect('/dashboard');
+  }
+  const testCases =
+    await testCaseRepository.findAllWithLatestAnalysisUnordered(projectId);
+  return reply.view('testcases.ejs', { project, testCases });
+}
+
+/**
  * Keterangan: Mendaftarkan gerbang `/`, halaman login, dashboard, dan
  * halaman generate test script. Dilindungi JWT via cookie/Bearer.
  */
@@ -69,5 +83,10 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
   app.get('/dashboard/projects/:id/generate', async (request, reply) => {
     const { id } = request.params as { id: string };
     return renderGeneratePage(id, reply);
+  });
+
+  app.get('/dashboard/projects/:id/test-cases', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    return renderTestCasesPage(id, reply);
   });
 }

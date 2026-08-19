@@ -231,6 +231,24 @@ CREATE TABLE feature_map (
 
 **Catatan desain:** `steps` dan `expected` disimpan sebagai `JSONB`, bukan tabel relasional terpisah — karena strukturnya fleksibel dan tidak butuh query relasional kompleks per-step di level SQL (query per-step yang butuh index cukup ditangani `test_step_result`). Ini mengurangi jumlah join untuk kasus penggunaan paling umum: ambil satu test case lengkap dengan sekali query.
 
+### 3.3 Perubahan skema pasca-dokumen awal (migration 002–005)
+
+DDL di atas (3.2) adalah bentuk **awal** dari `001_init.sql` — dibiarkan apa
+adanya sebagai catatan desain original (sesuai aturan kerja: DDL tidak diubah
+sesuka hati). Perubahan sungguhan sejak saat itu ada di migration bernomor
+lanjutan, dicatat di sini supaya dokumen ini tidak menyesatkan:
+
+| Migration | Perubahan | Kenapa |
+|---|---|---|
+| `002_project_provider.sql` | Tabel baru `project_provider` (project_id, provider, api_key_cipher, default_model, sort_order) — API key AI per project, terenkripsi, bisa lebih dari satu provider untuk fallback | `project.default_provider` saja tidak cukup; API key perlu disimpan per project (bukan cuma env global) dengan enkripsi at-rest |
+| `003_test_case_description.sql` | `test_case` + kolom `description TEXT` | Hasil generate AI butuh ringkasan tujuan uji manusiawi, bukan cuma title |
+| `004_project_instruction.sql` | `project` + kolom `instruction TEXT`, `extra_data TEXT` | Prompt/instruksi generate dan data tambahan disimpan per project supaya bisa dipakai ulang tanpa mengetik ulang tiap generate |
+| `005_suite_analysis_result.sql` | Tabel baru `suite_analysis_result` (project_id, suite_run_id [TEXT, bukan FK], test_run_ids JSONB, status, summary, findings JSONB, provider, raw_response) | Kapabilitas baru "Suite/Cross-Feature Analysis" (di luar roadmap 5 fase awal) — analisis AI lintas SEMUA test case sekaligus setelah satu suite run selesai, mencari inkonsistensi/coverage gap/pola kegagalan sistemik. Detail: `docs/memory.md` 2026-08-19 |
+
+Kolom/tabel di atas WAJIB dianggap bagian dari kontrak resmi yang sama
+kuatnya dengan 3.2 — jangan diubah nama/tipe tanpa migration baru + update
+baris tabel ini.
+
 ---
 
 ## 4. Kontrak Data Internal
@@ -263,6 +281,15 @@ CREATE TABLE feature_map (
 | `check` | `selector` | `page.check(selector)` |
 | `select` | `selector`, `value` | `page.selectOption(selector, value)` |
 | `waitFor` | `selector` | `page.waitForSelector(selector)` |
+| `assertVisible` | `selector` | `page.waitForSelector(selector, {state:'visible'})` |
+| `assertHidden` | `selector` | `page.waitForSelector(selector, {state:'hidden'})` |
+| `assertText` | `selector`, `value` | Polling: teks elemen mengandung `value` (case-insensitive) |
+| `assertValue` | `selector`, `value` | Polling: `locator.inputValue()` sama persis dengan `value` |
+| `assertChecked` | `selector` | Polling: `locator.isChecked()` bernilai true |
+| `assertCount` | `selector`, `value` | Polling: `locator.count()` sama dengan `value` (angka sebagai string) |
+| `assertUrl` | `value` | Polling: `page.url()` mengandung `value` (case-insensitive, tanpa selector) |
+
+Grup `assert*` adalah action **checkpoint** (memverifikasi state saat ini, tidak mengubah apa pun) — dipakai untuk membuktikan item `expected` benar-benar terjadi, bukan cuma teks deskriptif. Semua assertion gagal (timeout) melempar error dengan kondisi aktual terakhir di pesan error, ditangkap sama seperti action lain oleh `executeSteps` (step gagal → status `failed`, fail-fast). Assertion tidak boleh memakai `@playwright/test`'s `expect` (terikat konteks test runner) karena compiler juga dipakai standalone oleh `executor.ts`/`run-session.ts` di luar test runner — implementasi memakai API `Page`/`Locator` native + polling manual.
 
 Daftar ini adalah kontrak resmi — kalau ada action baru yang dibutuhkan nanti, tambahkan di tabel ini dulu sebelum diimplementasikan, supaya validasi schema (API) dan compiler (executor) tidak drift satu sama lain.
 
@@ -450,7 +477,59 @@ Skema database di atas sudah dirancang mengakomodasi seluruh fase — Fase 3–5
 
 ## 9. Spesifikasi Fase 3 — Test Generation dari AI
 
-### 9.1 Komponen tambahan
+> **CATATAN PENTING (diperbarui 2026-08-19): implementasi nyata MENYIMPANG
+> dari desain di bawah ini, TERMASUK soal MCP — riwayatnya dua tahap.**
+> Bagian 9.1–9.4 berikut adalah rencana ASLI (MCP + `test_case_draft`) yang
+> dibiarkan utuh sebagai catatan sejarah keputusan — **bukan persis yang
+> berjalan di kode**. Kronologi:
+> 1. **2026-08-18**: MCP ditinggalkan total — kontrol browser langsung via
+>    Chromium (`chromium.launch()` di `src/generator/page-explorer.ts`),
+>    karena pola "LLM memutuskan navigasi sendiri" (yang waktu itu jadi
+>    asumsi cara pakai MCP) sudah dicoba 2x dalam bentuk lain dan gagal di
+>    app nyata.
+> 2. **2026-08-19**: MCP (`@playwright/mcp`) **dipasang kembali**, tapi
+>    HANYA sebagai "colokan" browser (`src/generator/mcp-client.ts`,
+>    `McpBrowserSession`/`McpExplorationDriver`/`McpPageDriver`, koneksi
+>    in-process via `createConnection()` + `InMemoryTransport`, BUKAN child
+>    process/stdio) — LLM tetap TIDAK diberi kendali navigasi. Semua
+>    heuristik crawl deterministik (poin di bawah) dipertahankan 100% tanpa
+>    diubah, cuma cara bicara ke browser yang diganti dari Playwright `Page`
+>    langsung ke tool-call MCP. Ini SEKARANG satu-satunya jalur produksi
+>    untuk generate/eksplorasi (`withExploredPage` di page-explorer.ts).
+>    Eksekusi test case TERSIMPAN (bukan generate) tetap Playwright asli,
+>    tidak tersentuh sama sekali (`PlaywrightPageDriver`,
+>    `src/runner/executor.ts`/`run-session.ts`).
+> - **Tidak ada tabel `test_case_draft`** — hasil generate langsung
+>   `INSERT`/`UPDATE` ke `test_case` (opsional `replaceExisting`), tanpa
+>   status pending/approved/rejected terpisah.
+> - Arsitektur sungguhan: **Map-then-Author** — `discoverSite()`
+>   (`src/generator/generator.service.ts`) melakukan crawl BFS deterministik
+>   berbasis heuristik (landmark nav/sidebar/hamburger/backdrop/dropdown,
+>   `src/generator/page-explorer.ts`), menangani auth wall multi-zona dengan
+>   field dinamis + pause/resume interaktif (`src/generator/site-model.ts`,
+>   `auth-input-prompt.ts`), dan eksplorasi interaktif klik tombol/deteksi
+>   modal (`src/generator/interaction-explorer.ts`) — SATU endpoint
+>   `POST /projects/:id/generate/prompt` menangani baik generate dari
+>   instruksi bebas maupun eksplorasi seluruh situs (base_url project),
+>   bukan dua endpoint terpisah `/generate/prompt` vs `/generate/url`.
+>   `authorFromSiteModel()` lalu menyusun test case per-batch halaman via
+>   LLM (`LLMClient.complete()`, pola 4.2.1 di bawah tetap berlaku).
+> - Tambahan di luar rencana Fase 3 sama sekali: **assertion action nyata**
+>   (`assertVisible/Hidden/Checked/Text/Value/Count/Url` — lihat 4.1),
+>   **negative/boundary testing berbasis field constraint** (`required`/
+>   `maxlength`/`pattern`/`min`/`max` ditangkap dari DOM, wajib jadi skenario
+>   test case), **live view generate** yang sekarang polling
+>   `driver.screenshot()` tiap 400ms (bukan CDP screencast push — tidak
+>   tersedia di balik MCP), plus kapabilitas baru **Suite/Cross-Feature
+>   Analysis** (lihat bagian 12).
+>
+> Riwayat keputusan lengkap (kenapa MCP ditinggalkan lalu dipasang kembali
+> dengan peran berbeda, dan iterasi arsitektur di antaranya): `docs/memory.md`,
+> rentetan entri 2026-08-18 s.d. 2026-08-19 (mulai dari "Rewrite generate
+> test script: Map-then-Author" sampai "Integrasi MCP Playwright"). Status
+> resmi per-step: `docs/PROJECT_STATUS.md` bagian Fase 3.
+
+### 9.1 Komponen tambahan (rencana asli — implementasi menyimpang, lihat catatan di atas)
 
 ```
 src/
